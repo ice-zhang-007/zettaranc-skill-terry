@@ -575,6 +575,8 @@ td {
   white-space: nowrap;
 }
 .terminal-chart-header small {
+  display: inline-flex;
+  gap: 10px;
   color: #dce7f4;
   font-size: 12px;
   white-space: nowrap;

@@ -1083,21 +1083,26 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
   const headerOverlaySeries =
     lineMode === "zhixing"
       ? [
-          { name: "短期趋势", data: calculateZhixingShort(rows) },
-          { name: "长期趋势", data: calculateZhixingLong(rows) },
+          { name: "短期趋势", color: "#ffffff", data: calculateZhixingShort(rows) },
+          { name: "长期趋势", color: "#ffcc00", data: calculateZhixingLong(rows) },
         ]
       : Object.keys(maColors).map((name) => ({
           name,
           data: calculateMA(rows, Number(name.replace("MA", ""))),
         }));
   const overlayHeaderIndex = hoverIndex == null ? rows.length - 1 : hoverIndex;
-  const overlayHeaderText = headerOverlaySeries
-    .map(({ name, data: lineData }) => {
+  const overlayHeaderItems = headerOverlaySeries
+    .map(({ name, color, data: lineData }) => {
       const value = lineData[overlayHeaderIndex];
-      return value == null ? null : `${name}: ${Number(value).toFixed(2)}`;
+      return value == null
+        ? null
+        : {
+            name,
+            value: Number(value).toFixed(2),
+            color: maColors[name] || color || "#dce7f4",
+          };
     })
-    .filter(Boolean)
-    .join("  ");
+    .filter(Boolean);
 
   if (!rows.length) {
     return <div className="kline-empty">暂无 K 线数据</div>;
@@ -1110,12 +1115,16 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
           <strong>
             {data.ts_code} {data.name}
           </strong>
-          <span>
-            {formatDateLabel(rows[0].trade_date)} ~{" "}
-            {formatDateLabel(rows[rows.length - 1].trade_date)}
-          </span>
           {quoteSummary ? <em>{quoteSummary}</em> : null}
-          {overlayHeaderText ? <small>{overlayHeaderText}</small> : null}
+          {overlayHeaderItems.length ? (
+            <small>
+              {overlayHeaderItems.map((item) => (
+                <span key={item.name} style={{ color: item.color }}>
+                  {item.name}: {item.value}
+                </span>
+              ))}
+            </small>
+          ) : null}
         </div>
       </div>
       <div ref={chartRef} className="kline-echarts" />
