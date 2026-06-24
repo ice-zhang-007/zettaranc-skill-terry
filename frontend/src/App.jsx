@@ -593,6 +593,7 @@ function aggregateKlineRows(rows, period) {
         amount: Number(item.amount || 0),
         is_limit_up: item.is_limit_up,
         is_limit_down: item.is_limit_down,
+        signal_marks: item.signal_marks || [],
       };
       groups.push(current);
       return;
@@ -606,6 +607,9 @@ function aggregateKlineRows(rows, period) {
     current.amount += Number(item.amount || 0);
     current.is_limit_up = current.is_limit_up || item.is_limit_up;
     current.is_limit_down = current.is_limit_down || item.is_limit_down;
+    current.signal_marks = Array.from(
+      new Set([...(current.signal_marks || []), ...(item.signal_marks || [])]),
+    );
   });
 
   return groups.map((item, index) => {
@@ -641,17 +645,16 @@ function KlinePanel({ data, period }) {
           Number(item.vol || 0),
           kline[index][1] >= kline[index][0] ? 1 : -1,
         ]);
-        const limitUpPoints = rows
+        const b1Points = rows
           .map((item, index) =>
-            item.is_limit_up
+            item.signal_marks?.includes("B1")
               ? {
-                  name: "涨停",
+                  name: "B1",
                   coord: [dates[index], kline[index][2]],
-                  value: "涨停",
-                  symbol: "pin",
-                  symbolSize: 38,
-                  itemStyle: { color: "#ffcc00" },
-                  label: { color: "#050505", fontSize: 10 },
+                  value: "B1",
+                  symbol: "circle",
+                  symbolSize: 0,
+                  label: { color: "#ffcc00", fontSize: 12, fontWeight: 700 },
                 }
               : null,
           )
@@ -781,7 +784,7 @@ function KlinePanel({ data, period }) {
                 },
                 markPoint: {
                   symbolKeepAspect: true,
-                  data: limitUpPoints,
+                  data: b1Points,
                 },
               },
               ...Object.entries(maColors).map(([name, color]) => ({

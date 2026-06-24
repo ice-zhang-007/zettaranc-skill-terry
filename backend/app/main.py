@@ -478,6 +478,13 @@ def evaluate_selection_formula(history: list[sqlite3.Row]) -> dict[str, list[str
     return result
 
 
+def build_b1_signal_marks(history: list[sqlite3.Row]) -> list[list[str]]:
+    marks: list[list[str]] = []
+    for index in range(len(history)):
+        signals = evaluate_selection_formula(history[: index + 1])
+        marks.append(["B1"] if "B1" in signals else [])
+    return marks
+
 def build_selection_for_date(
     conn: sqlite3.Connection,
     trade_date: str,
@@ -775,11 +782,14 @@ def stock_detail(ts_code: str, tradeDate: str | None = Query(default=None, alias
             latest_trade_date = (
                 daily_rows[-1]["trade_date"] if daily_rows else trade_date
             )
+            history = [dict(r) for r in daily_rows]
+            for item, marks in zip(history, build_b1_signal_marks(daily_rows)):
+                item["signal_marks"] = marks
             return {
                 "ts_code": ts_code,
                 "name": row["name"],
                 "trade_date": latest_trade_date,
-                "history": [dict(r) for r in daily_rows],
+                "history": history,
                 "indicator": dict(indicator) if indicator else None,
             }
     except FileNotFoundError as exc:
