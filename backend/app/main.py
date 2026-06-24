@@ -220,17 +220,26 @@ def stock_detail(ts_code: str, tradeDate: str | None = Query(default=None, alias
             if not row:
                 raise HTTPException(status_code=404, detail="stock not found")
             daily_rows = conn.execute(
-                "SELECT trade_date, close, pct_chg, vol, is_limit_up FROM daily_kline WHERE ts_code = ? ORDER BY trade_date DESC LIMIT 10",
+                """
+                SELECT trade_date, open, high, low, close, pct_chg, vol, amount,
+                       is_limit_up, is_limit_down
+                FROM daily_kline
+                WHERE ts_code = ?
+                ORDER BY trade_date ASC
+                """,
                 (ts_code,),
             ).fetchall()
             indicator = conn.execute(
                 "SELECT * FROM indicator_cache WHERE ts_code = ? ORDER BY trade_date DESC LIMIT 1",
                 (ts_code,),
             ).fetchone()
+            latest_trade_date = (
+                daily_rows[-1]["trade_date"] if daily_rows else trade_date
+            )
             return {
                 "ts_code": ts_code,
                 "name": row["name"],
-                "trade_date": trade_date,
+                "trade_date": latest_trade_date,
                 "history": [dict(r) for r in daily_rows],
                 "indicator": dict(indicator) if indicator else None,
             }

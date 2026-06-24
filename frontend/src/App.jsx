@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   NavLink,
@@ -412,6 +412,307 @@ function IndicatorsPage() {
   );
 }
 
+const ECHARTS_CDN =
+  "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js";
+const upColor = "#ff3333";
+const downColor = "#00cc66";
+const maColors = {
+  MA5: "#ffffff",
+  MA24: "#ffcc00",
+  MA72: "#cc66ff",
+  MA120: "#00cc66",
+  MA240: "#66ffff",
+};
+
+function loadEcharts() {
+  if (window.echarts) return Promise.resolve(window.echarts);
+
+  const existingScript = document.querySelector(`script[src="${ECHARTS_CDN}"]`);
+  if (existingScript) {
+    return new Promise((resolve, reject) => {
+      existingScript.addEventListener("load", () => resolve(window.echarts), {
+        once: true,
+      });
+      existingScript.addEventListener("error", reject, { once: true });
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = ECHARTS_CDN;
+    script.async = true;
+    script.onload = () => resolve(window.echarts);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
+function formatDateLabel(raw) {
+  if (!raw || raw.length !== 8) return raw || "--";
+  return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6)}`;
+}
+
+function formatVolume(value) {
+  const num = Number(value || 0);
+  if (num >= 100000000) return `${(num / 100000000).toFixed(2)}亿`;
+  if (num >= 10000) return `${(num / 10000).toFixed(1)}万`;
+  return num.toFixed(0);
+}
+
+function calculateMA(rows, windowSize) {
+  return rows.map((_, index) => {
+    if (index + 1 < windowSize) return null;
+    const windowRows = rows.slice(index + 1 - windowSize, index + 1);
+    const total = windowRows.reduce(
+      (sum, row) => sum + Number(row.close || 0),
+      0,
+    );
+    return Number((total / windowSize).toFixed(3));
+  });
+}
+
+function KlinePanel({ data }) {
+  const chartRef = useRef(null);
+  const chartInstanceRef = useRef(null);
+  const rows = useMemo(() => data?.history || [], [data?.history]);
+
+  useEffect(() => {
+    let disposed = false;
+    let resizeObserver = null;
+
+    loadEcharts()
+      .then((echarts) => {
+        if (disposed || !chartRef.current || !rows.length) return;
+
+        const dates = rows.map((item) => formatDateLabel(item.trade_date));
+        const kline = rows.map((item) => [
+          Number(item.open ?? item.close ?? 0),
+          Number(item.close ?? 0),
+          Number(item.low ?? item.close ?? 0),
+          Number(item.high ?? item.close ?? 0),
+        ]);
+        const volumes = rows.map((item, index) => [
+          index,
+          Number(item.vol || 0),
+          Number(item.close || 0) >= Number(item.open ?? item.close ?? 0)
+            ? 1
+            : -1,
+        ]);
+        const limitUpPoints = rows
+          .map((item, index) =>
+            item.is_limit_up
+              ? {
+                  name: "涨停",
+                  coord: [dates[index], Number(item.low || item.close || 0)],
+                  value: "涨停",
+                  symbol: "pin",
+                  symbolSize: 38,
+                  itemStyle: { color: "#ffcc00" },
+                  label: { color: "#050505", fontSize: 10 },
+                }
+              : null,
+          )
+          .filter(Boolean);
+        const latest = rows[rows.length - 1];
+        const start = rows.length > 180 ? 100 - (180 / rows.length) * 100 : 0;
+
+        const chart =
+          chartInstanceRef.current || echarts.init(chartRef.current, null);
+        chartInstanceRef.current = chart;
+        chart.setOption(
+          {
+            backgroundColor: "#050505",
+            animation: false,
+            legend: {
+              top: 8,
+              right: 18,
+              itemWidth: 14,
+              itemHeight: 8,
+              textStyle: { color: "#aaa", fontSize: 11 },
+              data: ["K线", "MA5", "MA24", "MA72", "MA120", "MA240"],
+            },
+            tooltip: {
+              trigger: "axis",
+              axisPointer: { type: "cross", label: { backgroundColor: "#333" } },
+              backgroundColor: "rgba(10,10,10,0.94)",
+              borderColor: "#444",
+              textStyle: { color: "#eee", fontSize: 12 },
+              formatter(params) {
+                const k = params.find((item) => item.seriesName === "K线");
+                let html = `<div style="font-weight:bold;margin-bottom:4px;">${params[0].axisValue}</div>`;
+                if (k) {
+                  const values = k.data.length >= 5 ? k.data.slice(1) : k.data;
+                  const [open, close, low, high] = values;
+                  const color = close >= open ? upColor : downColor;
+                  html += `<span style="color:${color}">●</span> K线 开:<b>${open.toFixed(2)}</b> 收:<b>${close.toFixed(2)}</b> 高:<b>${high.toFixed(2)}</b> 低:<b>${low.toFixed(2)}</b><br/>`;
+                }
+                Object.keys(maColors).forEach((name) => {
+                  const point = params.find((item) => item.seriesName === name);
+                  if (point?.data != null) {
+                    html += `<span style="color:${point.color}">━</span> ${name}: <b>${Number(point.data).toFixed(2)}</b><br/>`;
+                  }
+                });
+                const volume = params.find((item) => item.seriesName === "成交量");
+                if (volume) {
+                  html += `成交量: <b>${formatVolume(volume.data[1])}</b>`;
+                }
+                return html;
+              },
+            },
+            axisPointer: { link: [{ xAxisIndex: "all" }] },
+            grid: [
+              { left: 54, right: 28, top: 48, height: "62%" },
+              { left: 54, right: 28, top: "76%", height: "16%" },
+            ],
+            xAxis: [
+              {
+                type: "category",
+                data: dates,
+                boundaryGap: false,
+                axisLine: { lineStyle: { color: "#333" } },
+                axisLabel: { color: "#888", fontSize: 10 },
+                splitLine: { show: false },
+                min: "dataMin",
+                max: "dataMax",
+              },
+              {
+                type: "category",
+                gridIndex: 1,
+                data: dates,
+                boundaryGap: false,
+                axisLine: { lineStyle: { color: "#333" } },
+                axisLabel: { show: false },
+                splitLine: { show: false },
+                min: "dataMin",
+                max: "dataMax",
+              },
+            ],
+            yAxis: [
+              {
+                scale: true,
+                axisLabel: { color: "#888", fontSize: 10 },
+                axisLine: { lineStyle: { color: "#333" } },
+                splitLine: { lineStyle: { color: "#1a1a1a" } },
+              },
+              {
+                scale: true,
+                gridIndex: 1,
+                splitNumber: 2,
+                axisLabel: { show: false },
+                axisLine: { show: false },
+                splitLine: { show: false },
+              },
+            ],
+            dataZoom: [
+              {
+                type: "inside",
+                xAxisIndex: [0, 1],
+                start,
+                end: 100,
+                zoomOnMouseWheel: true,
+                moveOnMouseMove: true,
+              },
+              {
+                type: "slider",
+                xAxisIndex: [0, 1],
+                top: "95%",
+                height: 18,
+                start,
+                end: 100,
+                borderColor: "#333",
+                fillerColor: "rgba(255,255,255,0.08)",
+                handleStyle: { color: "#666" },
+                textStyle: { color: "#888" },
+              },
+            ],
+            series: [
+              {
+                name: "K线",
+                type: "candlestick",
+                data: kline,
+                itemStyle: {
+                  color: upColor,
+                  color0: downColor,
+                  borderColor: upColor,
+                  borderColor0: downColor,
+                },
+                markPoint: {
+                  symbolKeepAspect: true,
+                  data: limitUpPoints,
+                },
+              },
+              ...Object.entries(maColors).map(([name, color]) => ({
+                name,
+                type: "line",
+                data: calculateMA(rows, Number(name.replace("MA", ""))),
+                smooth: false,
+                symbol: "none",
+                lineStyle: { width: 1, color },
+              })),
+              {
+                name: "成交量",
+                type: "bar",
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                data: volumes,
+                itemStyle: {
+                  color(params) {
+                    return params.value[2] > 0 ? upColor : downColor;
+                  },
+                },
+              },
+            ],
+          },
+          true,
+        );
+
+        resizeObserver = new ResizeObserver(() => chart.resize());
+        resizeObserver.observe(chartRef.current);
+
+        if (latest) {
+          chart.dispatchAction({
+            type: "showTip",
+            seriesIndex: 0,
+            dataIndex: rows.length - 1,
+          });
+        }
+      })
+      .catch(() => {
+        if (chartRef.current) chartRef.current.dataset.error = "true";
+      });
+
+    return () => {
+      disposed = true;
+      resizeObserver?.disconnect();
+      chartInstanceRef.current?.dispose();
+      chartInstanceRef.current = null;
+    };
+  }, [rows]);
+
+  if (!rows.length) {
+    return <div className="kline-empty">暂无 K 线数据</div>;
+  }
+
+  return (
+    <div className="terminal-chart">
+      <div className="terminal-chart-header">
+        <div>
+          <strong>
+            {data.ts_code} {data.name}
+          </strong>
+          <span>
+            {formatDateLabel(rows[0].trade_date)} ~{" "}
+            {formatDateLabel(rows[rows.length - 1].trade_date)}
+          </span>
+        </div>
+        <span>{rows.length} 根K线</span>
+      </div>
+      <div ref={chartRef} className="kline-echarts" />
+      <div className="kline-load-fallback">ECharts 加载失败，请检查网络。</div>
+    </div>
+  );
+}
+
 function StockDetailPage() {
   const { ts_code } = useParams();
   const { data, loading, error } = useApi(
@@ -425,6 +726,9 @@ function StockDetailPage() {
     { label: "单针", value: data?.indicator?.is_needle_20 },
     { label: "红砖", value: data?.indicator?.brick_trend_up },
   ].filter((item) => item.value);
+
+  const historyRows = data?.history || [];
+  const latestPoint = historyRows[historyRows.length - 1] || null;
 
   return (
     <div className="page">
@@ -445,12 +749,12 @@ function StockDetailPage() {
           <div className="stats-grid">
             <StatCard
               title="最新收盘"
-              value={data.history?.[0]?.close ?? "-"}
+              value={latestPoint?.close ?? "-"}
               hint="最近一日价格"
             />
             <StatCard
               title="最新涨跌"
-              value={`${data.history?.[0]?.pct_chg ?? "-"}%`}
+              value={`${latestPoint?.pct_chg ?? "-"}%`}
               hint="当日涨跌幅"
             />
             <StatCard
@@ -503,31 +807,8 @@ function StockDetailPage() {
           </div>
 
           <div className="card">
-            <h2>近 10 日行情</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>日期</th>
-                    <th>收盘</th>
-                    <th>涨跌幅</th>
-                    <th>成交量</th>
-                    <th>是否涨停</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.history?.map((item) => (
-                    <tr key={item.trade_date}>
-                      <td>{item.trade_date}</td>
-                      <td>{item.close}</td>
-                      <td>{item.pct_chg}%</td>
-                      <td>{item.vol}</td>
-                      <td>{item.is_limit_up ? "是" : "否"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <h2>两年历史 K 线</h2>
+            <KlinePanel data={data} />
           </div>
         </>
       ) : null}
