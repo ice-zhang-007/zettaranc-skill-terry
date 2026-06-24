@@ -954,7 +954,7 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                       width: Math.max(size[0] * 0.36, 1),
                       height: Math.max(Math.abs(endPoint[1] - startPoint[1]), 1),
                     },
-                    style: { fill: "#80ffff" },
+                    style: { fill: "#ffff80" },
                   };
                 },
               },
