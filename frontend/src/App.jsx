@@ -4,6 +4,7 @@ import {
   NavLink,
   Route,
   Routes,
+  useNavigate,
   useLocation,
   useParams,
 } from "react-router-dom";
@@ -459,6 +460,25 @@ function formatVolume(value) {
   return num.toFixed(0);
 }
 
+function formatAmount(value) {
+  const num = Number(value || 0);
+  if (num >= 100000) return `${(num / 100000).toFixed(2)}亿`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}千万`;
+  if (num > 0) return `${num.toFixed(0)}万`;
+  return "-";
+}
+
+function formatPrice(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(2) : "-";
+}
+
+function formatPercent(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "-";
+  return `${num > 0 ? "+" : ""}${num.toFixed(2)}%`;
+}
+
 function calculateMA(rows, windowSize) {
   return rows.map((_, index) => {
     if (index + 1 < windowSize) return null;
@@ -471,10 +491,85 @@ function calculateMA(rows, windowSize) {
   });
 }
 
-function KlinePanel({ data }) {
+function getKlineValues(item, previousItem) {
+  const close = Number(item.close || 0);
+  const previousClose = Number(previousItem?.close ?? close);
+  const open = Number(item.open ?? previousClose);
+  const high = Number(item.high ?? Math.max(open, close));
+  const low = Number(item.low ?? Math.min(open, close));
+
+  return [open, close, low, high];
+}
+
+function getPeriodKey(tradeDate, period) {
+  if (period === "month") return tradeDate.slice(0, 6);
+  if (period !== "week") return tradeDate;
+
+  const year = Number(tradeDate.slice(0, 4));
+  const month = Number(tradeDate.slice(4, 6)) - 1;
+  const day = Number(tradeDate.slice(6, 8));
+  const date = new Date(Date.UTC(year, month, day));
+  const weekDay = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - weekDay);
+  const weekYear = date.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(weekYear, 0, 1));
+  const week = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+  return `${weekYear}W${String(week).padStart(2, "0")}`;
+}
+
+function aggregateKlineRows(rows, period) {
+  if (period === "day") return rows;
+
+  const groups = [];
+  let current = null;
+
+  rows.forEach((item, index) => {
+    const key = getPeriodKey(item.trade_date, period);
+    const previousItem = rows[index - 1];
+    const [open, close, low, high] = getKlineValues(item, previousItem);
+
+    if (!current || current.key !== key) {
+      current = {
+        key,
+        trade_date: item.trade_date,
+        open,
+        high,
+        low,
+        close,
+        vol: Number(item.vol || 0),
+        amount: Number(item.amount || 0),
+        is_limit_up: item.is_limit_up,
+        is_limit_down: item.is_limit_down,
+      };
+      groups.push(current);
+      return;
+    }
+
+    current.trade_date = item.trade_date;
+    current.high = Math.max(Number(current.high || 0), high);
+    current.low = Math.min(Number(current.low || low), low);
+    current.close = close;
+    current.vol += Number(item.vol || 0);
+    current.amount += Number(item.amount || 0);
+    current.is_limit_up = current.is_limit_up || item.is_limit_up;
+    current.is_limit_down = current.is_limit_down || item.is_limit_down;
+  });
+
+  return groups.map((item, index) => {
+    const previousClose = Number(groups[index - 1]?.close ?? item.open);
+    const pct_chg =
+      previousClose > 0 ? ((Number(item.close) - previousClose) / previousClose) * 100 : 0;
+    return { ...item, pct_chg };
+  });
+}
+
+function KlinePanel({ data, period }) {
   const chartRef = useRef(null);
   const chartInstanceRef = useRef(null);
-  const rows = useMemo(() => data?.history || [], [data?.history]);
+  const rows = useMemo(
+    () => aggregateKlineRows(data?.history || [], period),
+    [data?.history, period],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -485,25 +580,20 @@ function KlinePanel({ data }) {
         if (disposed || !chartRef.current || !rows.length) return;
 
         const dates = rows.map((item) => formatDateLabel(item.trade_date));
-        const kline = rows.map((item) => [
-          Number(item.open ?? item.close ?? 0),
-          Number(item.close ?? 0),
-          Number(item.low ?? item.close ?? 0),
-          Number(item.high ?? item.close ?? 0),
-        ]);
+        const kline = rows.map((item, index) =>
+          getKlineValues(item, rows[index - 1]),
+        );
         const volumes = rows.map((item, index) => [
           index,
           Number(item.vol || 0),
-          Number(item.close || 0) >= Number(item.open ?? item.close ?? 0)
-            ? 1
-            : -1,
+          kline[index][1] >= kline[index][0] ? 1 : -1,
         ]);
         const limitUpPoints = rows
           .map((item, index) =>
             item.is_limit_up
               ? {
                   name: "涨停",
-                  coord: [dates[index], Number(item.low || item.close || 0)],
+                  coord: [dates[index], kline[index][2]],
                   value: "涨停",
                   symbol: "pin",
                   symbolSize: 38,
@@ -715,9 +805,16 @@ function KlinePanel({ data }) {
 
 function StockDetailPage() {
   const { ts_code } = useParams();
+  const navigate = useNavigate();
+  const [period, setPeriod] = useState("day");
+  const [watchRefresh, setWatchRefresh] = useState(0);
+  const [watchSaving, setWatchSaving] = useState(false);
+  const [watchError, setWatchError] = useState("");
   const { data, loading, error } = useApi(
     `/stock/${ts_code}?tradeDate=20260624`,
   );
+  const { data: selectionData } = useApi("/selection-history");
+  const { data: watchData } = useApi(`/watchlist?refresh=${watchRefresh}`);
 
   const indicatorFlags = [
     { label: "反包", value: data?.indicator?.is_fanbao },
@@ -729,66 +826,219 @@ function StockDetailPage() {
 
   const historyRows = data?.history || [];
   const latestPoint = historyRows[historyRows.length - 1] || null;
+  const previousPoint = historyRows[historyRows.length - 2] || null;
+  const latestKline = latestPoint
+    ? getKlineValues(latestPoint, previousPoint)
+    : null;
+  const quoteTone =
+    Number(latestPoint?.pct_chg || 0) >= 0 ? "quote-up" : "quote-down";
+  const selectionDay = selectionData?.days?.[0] || null;
+  const selectionItems = selectionDay?.B1?.length
+    ? selectionDay.B1
+    : selectionDay
+      ? Object.values(selectionDay)
+          .filter(Array.isArray)
+          .flat()
+      : [];
+  const activeIndex = selectionItems.findIndex(
+    (item) => item.ts_code === data?.ts_code,
+  );
+  const isWatched = Boolean(
+    watchData?.items?.some((item) => item.ts_code === data?.ts_code),
+  );
+  const marketStats = [
+    { label: "总市值", value: "-" },
+    { label: "流通市值", value: "-" },
+    { label: "开", value: formatPrice(latestKline?.[0]) },
+    { label: "高", value: formatPrice(latestKline?.[3]) },
+    { label: "低", value: formatPrice(latestKline?.[2]) },
+    { label: "收", value: formatPrice(latestPoint?.close) },
+    { label: "涨幅", value: formatPercent(latestPoint?.pct_chg) },
+    { label: "成交额", value: formatAmount(latestPoint?.amount) },
+  ];
+
+  useEffect(() => {
+    if (!selectionItems.length) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      const currentIndex = activeIndex >= 0 ? activeIndex : 0;
+      const offset = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex =
+        (currentIndex + offset + selectionItems.length) % selectionItems.length;
+      const nextStock = selectionItems[nextIndex];
+      if (nextStock?.ts_code) {
+        event.preventDefault();
+        navigate(`/stock/${nextStock.ts_code}`);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeIndex, navigate, selectionItems]);
+
+  const toggleWatchlist = () => {
+    if (!data?.ts_code || watchSaving) return;
+
+    setWatchSaving(true);
+    setWatchError("");
+    fetch(
+      isWatched
+        ? `/api/watchlist/${encodeURIComponent(data.ts_code)}`
+        : "/api/watchlist",
+      {
+        method: isWatched ? "DELETE" : "POST",
+        headers: isWatched ? undefined : { "Content-Type": "application/json" },
+        body: isWatched
+          ? undefined
+          : JSON.stringify({
+              ts_code: data.ts_code,
+              name: data.name,
+              tags: indicatorFlags.map((item) => item.label).join(","),
+            }),
+      },
+    )
+      .then((res) => {
+        if (!res.ok) throw new Error(`自选股操作失败：${res.status}`);
+        return res.json();
+      })
+      .then(() => {
+        setWatchRefresh((value) => value + 1);
+      })
+      .catch((e) => {
+        setWatchError(String(e));
+      })
+      .finally(() => {
+        setWatchSaving(false);
+      });
+  };
 
   return (
-    <div className="page">
-      <section className="hero">
-        <div>
-          <h1>{data?.name || ts_code}</h1>
-          <p>
-            {data?.ts_code || ts_code} · 最新交易日 {data?.trade_date || "-"}
-          </p>
-        </div>
-        <div className="pill">个股详情</div>
-      </section>
-
+    <div className="page stock-detail-page">
       {loading && <p>正在加载...</p>}
       {error && <p className="error">{error}</p>}
       {!loading && data ? (
-        <>
-          <div className="stats-grid">
-            <StatCard
-              title="最新收盘"
-              value={latestPoint?.close ?? "-"}
-              hint="最近一日价格"
-            />
-            <StatCard
-              title="最新涨跌"
-              value={`${latestPoint?.pct_chg ?? "-"}%`}
-              hint="当日涨跌幅"
-            />
-            <StatCard
-              title="信号"
-              value={data.indicator?.signal || "WATCH"}
-              hint="策略标签"
-            />
-          </div>
+        <section className="kline-layout">
+          <aside className="selection-rail">
+            <div className="selection-rail-header">
+              <strong>趋势回调-b1</strong>
+              <span>选股日 {formatDateLabel(selectionDay?.trade_date)}</span>
+              <small>上下方向键切换股票</small>
+            </div>
+            <div className="selection-rail-list">
+              {selectionItems.map((item, index) => (
+                <Link
+                  key={item.ts_code}
+                  to={`/stock/${item.ts_code}`}
+                  className={`selection-rail-item ${
+                    item.ts_code === data.ts_code ? "active" : ""
+                  }`}
+                >
+                  <span>{index + 1}.</span>
+                  <strong>{item.ts_code.split(".")[0]}</strong>
+                  <em>{item.name}</em>
+                  <small>{item.tags?.join(" / ") || "观察"}</small>
+                </Link>
+              ))}
+            </div>
+          </aside>
 
-          <div className="detail-grid">
-            <div className="card">
-              <h2>基础信息</h2>
-              <div className="detail-list">
-                <div className="detail-row">
-                  <span className="label">代码</span>
-                  <span>{data.ts_code}</span>
+          <div className="quote-shell">
+            <div className="quote-actions">
+              <Link to="/selection">返回选股</Link>
+              <button
+                className={isWatched ? "active" : ""}
+                type="button"
+                onClick={toggleWatchlist}
+                disabled={watchSaving}
+              >
+                {watchSaving ? "处理中" : isWatched ? "删自选" : "加自选"}
+              </button>
+              <span>简洁</span>
+            </div>
+            {watchError ? <p className="watch-error">{watchError}</p> : null}
+            <div className="quote-header">
+              <div className="quote-title">
+                <h1>{data.name}</h1>
+                <span>{data.ts_code.split(".")[0]}</span>
+              </div>
+              <div className="quote-date">{formatDateLabel(data.trade_date)}</div>
+            </div>
+
+            <div className="quote-board">
+              <div className={`quote-price ${quoteTone}`}>
+                <strong>{formatPrice(latestPoint?.close)}</strong>
+                <span>{formatPercent(latestPoint?.pct_chg)}</span>
+              </div>
+              <div className="quote-metrics">
+                <div>
+                  <span>趋势</span>
+                  <strong>短:{formatPrice(calculateMA(historyRows, 10).at(-1))}</strong>
                 </div>
-                <div className="detail-row">
-                  <span className="label">名称</span>
-                  <span>{data.name}</span>
+                <div>
+                  <span>行业</span>
+                  <strong>{data.indicator?.industry || "观察"}</strong>
                 </div>
-                <div className="detail-row">
-                  <span className="label">最新日期</span>
-                  <span>{data.trade_date}</span>
+                <div>
+                  <span>热门概念</span>
+                  <strong>
+                    {indicatorFlags.map((item) => item.label).join(" / ") || "-"}
+                  </strong>
                 </div>
-                <div className="detail-row">
-                  <span className="label">止损评分</span>
-                  <span>{data.indicator?.sell_score ?? "-"}</span>
+                <div>
+                  <span>成交额</span>
+                  <strong>{formatAmount(latestPoint?.amount)}</strong>
+                </div>
+                <div>
+                  <span>信号</span>
+                  <strong>{data.indicator?.signal || "WATCH"}</strong>
+                </div>
+                <div>
+                  <span>止损分</span>
+                  <strong>{data.indicator?.sell_score ?? "-"}</strong>
                 </div>
               </div>
             </div>
 
-            <div className="card">
-              <h2>当前指标</h2>
+            <div className="kline-toolbar" aria-label="K线周期">
+              <button type="button">30分</button>
+              <button type="button">60分</button>
+              <button
+                className={period === "day" ? "active" : ""}
+                type="button"
+                onClick={() => setPeriod("day")}
+              >
+                日
+              </button>
+              <button
+                className={period === "week" ? "active" : ""}
+                type="button"
+                onClick={() => setPeriod("week")}
+              >
+                周
+              </button>
+              <button
+                className={period === "month" ? "active" : ""}
+                type="button"
+                onClick={() => setPeriod("month")}
+              >
+                月
+              </button>
+            </div>
+
+            <div className="chart-workspace">
+              <KlinePanel data={data} period={period} />
+            </div>
+
+            <div className="signal-panel">
+              <div className="market-stat-grid">
+                {marketStats.map((item) => (
+                  <div key={item.label}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
               <div className="badge-wrap">
                 {indicatorFlags.length ? (
                   indicatorFlags.map((item) => (
@@ -805,12 +1055,7 @@ function StockDetailPage() {
               ) : null}
             </div>
           </div>
-
-          <div className="card">
-            <h2>两年历史 K 线</h2>
-            <KlinePanel data={data} />
-          </div>
-        </>
+        </section>
       ) : null}
     </div>
   );

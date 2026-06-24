@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 DB_PATH = os.getenv(
@@ -28,6 +28,29 @@ def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(db_file)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def ensure_watchlist_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_code TEXT NOT NULL UNIQUE,
+            name TEXT,
+            tags TEXT DEFAULT '',
+            added_date TEXT DEFAULT CURRENT_TIMESTAMP,
+            alert_enabled INTEGER DEFAULT 1,
+            notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_watchlist_tags
+        ON watchlist(tags)
+        """
+    )
 
 
 def normalize_trade_date(raw: str | None) -> str:
@@ -265,10 +288,79 @@ def strategy_summary() -> dict[str, Any]:
 def watchlist() -> dict[str, Any]:
     try:
         with get_connection() as conn:
+            ensure_watchlist_table(conn)
             rows = conn.execute(
-                "SELECT ts_code, name, tags, notes, alert_enabled FROM watchlist ORDER BY updated_at DESC LIMIT 20"
+                """
+                SELECT ts_code, name, tags, notes, alert_enabled, added_date, updated_at
+                FROM watchlist
+                ORDER BY updated_at DESC
+                LIMIT 200
+                """
             ).fetchall()
             return {"items": [dict(r) for r in rows]}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/watchlist")
+def add_watchlist_item(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    ts_code = str(payload.get("ts_code") or "").strip().upper()
+    if not ts_code:
+        raise HTTPException(status_code=400, detail="ts_code is required")
+
+    try:
+        with get_connection() as conn:
+            ensure_watchlist_table(conn)
+            stock_row = conn.execute(
+                "SELECT name FROM stock_basic WHERE ts_code = ?",
+                (ts_code,),
+            ).fetchone()
+            name = str(payload.get("name") or (stock_row["name"] if stock_row else ts_code))
+            tags = str(payload.get("tags") or "")
+            notes = str(payload.get("notes") or "")
+            alert_enabled = 1 if payload.get("alert_enabled", True) else 0
+            conn.execute(
+                """
+                INSERT INTO watchlist (ts_code, name, tags, notes, alert_enabled)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(ts_code) DO UPDATE SET
+                    name = excluded.name,
+                    tags = excluded.tags,
+                    notes = excluded.notes,
+                    alert_enabled = excluded.alert_enabled,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (ts_code, name, tags, notes, alert_enabled),
+            )
+            conn.commit()
+            row = conn.execute(
+                """
+                SELECT ts_code, name, tags, notes, alert_enabled, added_date, updated_at
+                FROM watchlist
+                WHERE ts_code = ?
+                """,
+                (ts_code,),
+            ).fetchone()
+            return {"item": dict(row), "message": "added"}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.delete("/api/watchlist/{ts_code}")
+def delete_watchlist_item(ts_code: str) -> dict[str, Any]:
+    normalized_code = ts_code.strip().upper()
+    if not normalized_code:
+        raise HTTPException(status_code=400, detail="ts_code is required")
+
+    try:
+        with get_connection() as conn:
+            ensure_watchlist_table(conn)
+            cursor = conn.execute(
+                "DELETE FROM watchlist WHERE ts_code = ?",
+                (normalized_code,),
+            )
+            conn.commit()
+            return {"deleted": cursor.rowcount, "ts_code": normalized_code}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
