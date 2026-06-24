@@ -490,6 +490,12 @@ td {
   color: #ffcc00;
   background: #151303;
 }
+.toolbar-divider {
+  width: 1px;
+  height: 22px;
+  margin: 3px 4px;
+  background: #263241;
+}
 .chart-workspace {
   flex: 1 1 auto;
   min-height: 0;

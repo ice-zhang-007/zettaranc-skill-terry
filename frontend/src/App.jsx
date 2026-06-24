@@ -544,6 +544,32 @@ function calculateMA(rows, windowSize) {
   });
 }
 
+
+function calculateEMA(rows, span) {
+  const alpha = 2 / (span + 1);
+  let previous = null;
+  return rows.map((row) => {
+    const close = Number(row.close || 0);
+    previous = previous == null ? close : alpha * close + (1 - alpha) * previous;
+    return Number(previous.toFixed(3));
+  });
+}
+
+function calculateZhixingShort(rows) {
+  const first = calculateEMA(rows, 10).map((close) => ({ close }));
+  return calculateEMA(first, 10);
+}
+
+function calculateZhixingLong(rows) {
+  const windows = [14, 28, 57, 114];
+  const maList = windows.map((windowSize) => calculateMA(rows, windowSize));
+  return rows.map((_, index) => {
+    const values = maList.map((line) => line[index]);
+    if (values.some((value) => value == null)) return null;
+    const total = values.reduce((sum, value) => sum + Number(value), 0);
+    return Number((total / values.length).toFixed(3));
+  });
+}
 function getKlineValues(item, previousItem) {
   const close = Number(item.close || 0);
   const previousClose = Number(previousItem?.close ?? close);
@@ -620,7 +646,7 @@ function aggregateKlineRows(rows, period) {
   });
 }
 
-function KlinePanel({ data, period }) {
+function KlinePanel({ data, period, lineMode }) {
   const chartRef = useRef(null);
   const chartInstanceRef = useRef(null);
   const rows = useMemo(
@@ -659,6 +685,18 @@ function KlinePanel({ data, period }) {
               : null,
           )
           .filter(Boolean);
+        const overlaySeries =
+          lineMode === "zhixing"
+            ? [
+                { name: "短期趋势", color: "#ffffff", data: calculateZhixingShort(rows) },
+                { name: "长期趋势", color: "#ffcc00", data: calculateZhixingLong(rows) },
+              ]
+            : Object.entries(maColors).map(([name, color]) => ({
+                name,
+                color,
+                data: calculateMA(rows, Number(name.replace("MA", ""))),
+              }));
+        const overlayNames = overlaySeries.map((item) => item.name);
         const latest = rows[rows.length - 1];
         const start = rows.length > 180 ? 100 - (180 / rows.length) * 100 : 0;
 
@@ -675,7 +713,7 @@ function KlinePanel({ data, period }) {
               itemWidth: 14,
               itemHeight: 8,
               textStyle: { color: "#aaa", fontSize: 11 },
-              data: ["K线", "MA5", "MA24", "MA72", "MA120", "MA240"],
+              data: ["K线", ...overlayNames],
             },
             tooltip: {
               trigger: "axis",
@@ -692,7 +730,7 @@ function KlinePanel({ data, period }) {
                   const color = close >= open ? upColor : downColor;
                   html += `<span style="color:${color}">●</span> K线 开:<b>${open.toFixed(2)}</b> 收:<b>${close.toFixed(2)}</b> 高:<b>${high.toFixed(2)}</b> 低:<b>${low.toFixed(2)}</b><br/>`;
                 }
-                Object.keys(maColors).forEach((name) => {
+                overlaySeries.forEach(({ name }) => {
                   const point = params.find((item) => item.seriesName === name);
                   if (point?.data != null) {
                     html += `<span style="color:${point.color}">━</span> ${name}: <b>${Number(point.data).toFixed(2)}</b><br/>`;
@@ -787,10 +825,10 @@ function KlinePanel({ data, period }) {
                   data: b1Points,
                 },
               },
-              ...Object.entries(maColors).map(([name, color]) => ({
+              ...overlaySeries.map(({ name, color, data: lineData }) => ({
                 name,
                 type: "line",
-                data: calculateMA(rows, Number(name.replace("MA", ""))),
+                data: lineData,
                 smooth: false,
                 symbol: "none",
                 lineStyle: { width: 1, color },
@@ -833,7 +871,7 @@ function KlinePanel({ data, period }) {
       chartInstanceRef.current?.dispose();
       chartInstanceRef.current = null;
     };
-  }, [rows]);
+  }, [rows, lineMode]);
 
   if (!rows.length) {
     return <div className="kline-empty">暂无 K 线数据</div>;
@@ -851,7 +889,6 @@ function KlinePanel({ data, period }) {
             {formatDateLabel(rows[rows.length - 1].trade_date)}
           </span>
         </div>
-        <span>{rows.length} 根K线</span>
       </div>
       <div ref={chartRef} className="kline-echarts" />
       <div className="kline-load-fallback">ECharts 加载失败，请检查网络。</div>
@@ -863,6 +900,7 @@ function StockDetailPage() {
   const { ts_code } = useParams();
   const navigate = useNavigate();
   const [period, setPeriod] = useState("day");
+  const [lineMode, setLineMode] = useState("524");
   const [watchRefresh, setWatchRefresh] = useState(0);
   const [watchSaving, setWatchSaving] = useState(false);
   const [watchError, setWatchError] = useState("");
@@ -1080,10 +1118,25 @@ function StockDetailPage() {
               >
                 月
               </button>
+              <span className="toolbar-divider" />
+              <button
+                className={lineMode === "524" ? "active" : ""}
+                type="button"
+                onClick={() => setLineMode("524")}
+              >
+                524
+              </button>
+              <button
+                className={lineMode === "zhixing" ? "active" : ""}
+                type="button"
+                onClick={() => setLineMode("zhixing")}
+              >
+                知行
+              </button>
             </div>
 
             <div className="chart-workspace">
-              <KlinePanel data={data} period={period} />
+              <KlinePanel data={data} period={period} lineMode={lineMode} />
             </div>
 
             <div className="signal-panel">
