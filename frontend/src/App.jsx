@@ -784,13 +784,6 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                   html += `<span style="color:${color}">●</span> K线 开:<b>${open.toFixed(2)}</b> 收:<b>${close.toFixed(2)}</b> 高:<b>${high.toFixed(2)}</b> 低:<b>${low.toFixed(2)}</b> 涨幅:<b>${formatPercent(pct)}</b><br/>`;
                 }
 
-                ["DIFF", "DEA", "MACD"].forEach((name) => {
-                  const point = params.find((item) => item.seriesName === name);
-                  const rawValue = Array.isArray(point?.data) ? point.data[1] : point?.data;
-                  if (rawValue != null) {
-                    html += `<span style="color:${point.color}">━</span> ${name}: <b>${Number(rawValue).toFixed(3)}</b><br/>`;
-                  }
-                });
                 return html;
               },
             },
@@ -1112,6 +1105,27 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
       color: "#ffcc00",
     },
   ];
+  const macdHeaderData = calculateMACD(rows);
+  const macdHeaderItems = [
+    {
+      name: "DIFF",
+      value: Number(macdHeaderData.diff[volumeHeaderIndex] || 0).toFixed(3),
+      color: "#ffffff",
+    },
+    {
+      name: "DEA",
+      value: Number(macdHeaderData.dea[volumeHeaderIndex] || 0).toFixed(3),
+      color: "#ffcc00",
+    },
+    {
+      name: "MACD",
+      value: Number(macdHeaderData.macd[volumeHeaderIndex] || 0).toFixed(3),
+      color:
+        Number(macdHeaderData.macd[volumeHeaderIndex] || 0) >= 0
+          ? upColor
+          : downColor,
+    },
+  ];
 
   if (!rows.length) {
     return <div className="kline-empty">暂无 K 线数据</div>;
@@ -1139,6 +1153,13 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
       <div ref={chartRef} className="kline-echarts" />
       <div className="volume-subchart-header">
         {volumeHeaderItems.map((item) => (
+          <span key={item.name} style={{ color: item.color }}>
+            {item.name}: {item.value}
+          </span>
+        ))}
+      </div>
+      <div className="macd-subchart-header">
+        {macdHeaderItems.map((item) => (
           <span key={item.name} style={{ color: item.color }}>
             {item.name}: {item.value}
           </span>
