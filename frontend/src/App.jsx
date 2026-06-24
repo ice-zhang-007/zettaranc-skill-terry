@@ -545,6 +545,48 @@ function calculateMA(rows, windowSize) {
 }
 
 
+function calculateMAValues(values, windowSize) {
+  return values.map((_, index) => {
+    if (index + 1 < windowSize) return null;
+    const windowValues = values.slice(index + 1 - windowSize, index + 1);
+    const total = windowValues.reduce((sum, value) => sum + Number(value || 0), 0);
+    return Number((total / windowSize).toFixed(3));
+  });
+}
+
+function calculateEMAValues(values, span) {
+  const alpha = 2 / (span + 1);
+  let previous = null;
+  return values.map((value) => {
+    const current = Number(value || 0);
+    previous = previous == null ? current : alpha * current + (1 - alpha) * previous;
+    return Number(previous.toFixed(3));
+  });
+}
+
+function calculateMACD(rows) {
+  const closes = rows.map((row) => Number(row.close || 0));
+  const ema12 = calculateEMAValues(closes, 12);
+  const ema26 = calculateEMAValues(closes, 26);
+  const diff = ema12.map((value, index) => Number((value - ema26[index]).toFixed(3)));
+  const dea = calculateEMAValues(diff, 9);
+  const macd = diff.map((value, index) => Number((2 * (value - dea[index])).toFixed(3)));
+  const macdMa5 = calculateMAValues(macd, 5);
+  const crossBars = macd.map((value, index) => {
+    if (index === 0) return null;
+    const crossUp = diff[index - 1] <= 0 && diff[index] > 0;
+    const crossDown = diff[index - 1] >= 0 && diff[index] < 0;
+    if (crossUp) return { value, color: "#ff3333" };
+    if (crossDown) return { value, color: "#66cc88" };
+    return null;
+  });
+  const highlight = macd.map((value, index) => {
+    const base = macdMa5[index];
+    if (base == null || value <= base) return [index, null, null];
+    return [index, base, value];
+  });
+  return { diff, dea, macd, macdMa5, crossBars, highlight };
+}
 function calculateEMA(rows, span) {
   const alpha = 2 / (span + 1);
   let previous = null;
@@ -570,6 +612,7 @@ function calculateZhixingLong(rows) {
     return Number((total / values.length).toFixed(3));
   });
 }
+
 function getKlineValues(item, previousItem) {
   const close = Number(item.close || 0);
   const previousClose = Number(previousItem?.close ?? close);
@@ -671,6 +714,7 @@ function KlinePanel({ data, period, lineMode }) {
           Number(item.vol || 0),
           kline[index][1] >= kline[index][0] ? 1 : -1,
         ]);
+        const macdData = calculateMACD(rows);
         const b1Points = rows
           .map((item, index) =>
             item.signal_marks?.includes("B1")
@@ -713,7 +757,7 @@ function KlinePanel({ data, period, lineMode }) {
               itemWidth: 14,
               itemHeight: 8,
               textStyle: { color: "#aaa", fontSize: 11 },
-              data: ["K线", ...overlayNames],
+              data: ["K线", ...overlayNames, "成交量", "DIFF", "DEA", "MACD"],
             },
             tooltip: {
               trigger: "axis",
@@ -738,15 +782,23 @@ function KlinePanel({ data, period, lineMode }) {
                 });
                 const volume = params.find((item) => item.seriesName === "成交量");
                 if (volume) {
-                  html += `成交量: <b>${formatVolume(volume.data[1])}</b>`;
+                  html += `成交量: <b>${formatVolume(volume.data[1])}</b><br/>`;
                 }
+                ["DIFF", "DEA", "MACD"].forEach((name) => {
+                  const point = params.find((item) => item.seriesName === name);
+                  const rawValue = Array.isArray(point?.data) ? point.data[1] : point?.data;
+                  if (rawValue != null) {
+                    html += `<span style="color:${point.color}">━</span> ${name}: <b>${Number(rawValue).toFixed(3)}</b><br/>`;
+                  }
+                });
                 return html;
               },
             },
             axisPointer: { link: [{ xAxisIndex: "all" }] },
             grid: [
-              { left: 54, right: 28, top: 48, height: "62%" },
-              { left: 54, right: 28, top: "76%", height: "16%" },
+              { left: 54, right: 28, top: 48, height: "54%" },
+              { left: 54, right: 28, top: "66%", height: "11%" },
+              { left: 54, right: 28, top: "81%", height: "12%" },
             ],
             xAxis: [
               {
@@ -770,6 +822,17 @@ function KlinePanel({ data, period, lineMode }) {
                 min: "dataMin",
                 max: "dataMax",
               },
+            {
+                type: "category",
+                gridIndex: 2,
+                data: dates,
+                boundaryGap: false,
+                axisLine: { lineStyle: { color: "#333" } },
+                axisLabel: { color: "#888", fontSize: 10 },
+                splitLine: { show: false },
+                min: "dataMin",
+                max: "dataMax",
+              },
             ],
             yAxis: [
               {
@@ -786,11 +849,19 @@ function KlinePanel({ data, period, lineMode }) {
                 axisLine: { show: false },
                 splitLine: { show: false },
               },
+            {
+                scale: true,
+                gridIndex: 2,
+                splitNumber: 2,
+                axisLabel: { color: "#888", fontSize: 10 },
+                axisLine: { show: false },
+                splitLine: { lineStyle: { color: "#1a1a1a" } },
+              },
             ],
             dataZoom: [
               {
                 type: "inside",
-                xAxisIndex: [0, 1],
+                xAxisIndex: [0, 1, 2],
                 start,
                 end: 100,
                 zoomOnMouseWheel: true,
@@ -798,7 +869,7 @@ function KlinePanel({ data, period, lineMode }) {
               },
               {
                 type: "slider",
-                xAxisIndex: [0, 1],
+                xAxisIndex: [0, 1, 2],
                 top: "95%",
                 height: 18,
                 start,
@@ -844,6 +915,68 @@ function KlinePanel({ data, period, lineMode }) {
                     return params.value[2] > 0 ? upColor : downColor;
                   },
                 },
+              },
+              {
+                name: "MACD",
+                type: "bar",
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.macd,
+                itemStyle: {
+                  color(params) {
+                    const index = params.dataIndex;
+                    const crossColor = macdData.crossBars[index]?.color;
+                    if (crossColor) return crossColor;
+                    return params.value >= 0 ? upColor : downColor;
+                  },
+                },
+              },
+              {
+                name: "MACD增强",
+                type: "custom",
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.highlight,
+                silent: true,
+                renderItem(params, api) {
+                  const xValue = api.value(0);
+                  const yStart = api.value(1);
+                  const yEnd = api.value(2);
+                  if (yStart == null || yEnd == null) return null;
+                  const startPoint = api.coord([xValue, yStart]);
+                  const endPoint = api.coord([xValue, yEnd]);
+                  const size = api.size([1, 0]);
+                  return {
+                    type: "rect",
+                    shape: {
+                      x: startPoint[0] - Math.max(size[0] * 0.18, 1),
+                      y: Math.min(startPoint[1], endPoint[1]),
+                      width: Math.max(size[0] * 0.36, 1),
+                      height: Math.max(Math.abs(endPoint[1] - startPoint[1]), 1),
+                    },
+                    style: { fill: "#80ffff" },
+                  };
+                },
+              },
+              {
+                name: "DIFF",
+                type: "line",
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.diff,
+                smooth: false,
+                symbol: "none",
+                lineStyle: { width: 1, color: "#ffffff" },
+              },
+              {
+                name: "DEA",
+                type: "line",
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.dea,
+                smooth: false,
+                symbol: "none",
+                lineStyle: { width: 1, color: "#ffcc00" },
               },
             ],
           },
