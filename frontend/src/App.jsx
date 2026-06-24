@@ -554,6 +554,10 @@ function calculateMAValues(values, windowSize) {
   });
 }
 
+function calculateVolumeMA(rows, windowSize) {
+  const values = rows.map((row) => Number(row.vol || 0));
+  return calculateMAValues(values, windowSize);
+}
 function calculateEMAValues(values, span) {
   const alpha = 2 / (span + 1);
   let previous = null;
@@ -714,6 +718,8 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
           Number(item.vol || 0),
           kline[index][1] >= kline[index][0] ? 1 : -1,
         ]);
+        const volumeMA5 = calculateVolumeMA(rows, 5);
+        const volumeMA60 = calculateVolumeMA(rows, 60);
         const macdData = calculateMACD(rows);
         const b1Points = rows
           .map((item, index) =>
@@ -757,7 +763,7 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
               itemWidth: 14,
               itemHeight: 8,
               textStyle: { color: "#aaa", fontSize: 11 },
-              data: ["K线", ...overlayNames, "成交量", "DIFF", "DEA", "MACD"],
+              data: ["K线", ...overlayNames, "成交量", "MA5量", "MA60量", "DIFF", "DEA", "MACD"],
             },
             tooltip: {
               trigger: "axis",
@@ -784,6 +790,12 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                 if (volume) {
                   html += `成交量: <b>${formatVolume(volume.data[1])}</b><br/>`;
                 }
+                ["MA5量", "MA60量"].forEach((name) => {
+                  const point = params.find((item) => item.seriesName === name);
+                  if (point?.data != null) {
+                    html += `<span style="color:${point.color}">━</span> ${name}: <b>${formatVolume(point.data)}</b><br/>`;
+                  }
+                });
                 ["DIFF", "DEA", "MACD"].forEach((name) => {
                   const point = params.find((item) => item.seriesName === name);
                   const rawValue = Array.isArray(point?.data) ? point.data[1] : point?.data;
@@ -915,6 +927,26 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                     return params.value[2] > 0 ? upColor : downColor;
                   },
                 },
+              },
+              {
+                name: "MA5量",
+                type: "line",
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                data: volumeMA5,
+                smooth: false,
+                symbol: "none",
+                lineStyle: { width: 1, color: "#ffffff" },
+              },
+              {
+                name: "MA60量",
+                type: "line",
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                data: volumeMA60,
+                smooth: false,
+                symbol: "none",
+                lineStyle: { width: 1, color: "#ffcc00" },
               },
               {
                 name: "MACD",
