@@ -580,16 +580,17 @@ function calculateMACD(rows) {
     if (index === 0) return null;
     const crossUp = diff[index - 1] <= 0 && diff[index] > 0;
     const crossDown = diff[index - 1] >= 0 && diff[index] < 0;
-    if (crossUp) return { value, color: "#ff3333" };
-    if (crossDown) return { value, color: "#66cc88" };
+    if (crossUp) return { value, color: "#ff1a1a" };
+    if (crossDown) return { value, color: "#66ff99" };
     return null;
   });
+  const crossMacd = crossBars.map((item) => (item ? item.value : null));
   const highlight = macd.map((value, index) => {
     const base = macdMa5[index];
     if (base == null || value <= base) return [index, null, null];
     return [index, base, value];
   });
-  return { diff, dea, macd, macdMa5, crossBars, highlight };
+  return { diff, dea, macd, macdMa5, crossBars, crossMacd, highlight };
 }
 function calculateEMA(rows, span) {
   const alpha = 2 / (span + 1);
@@ -950,17 +951,53 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
               },
               {
                 name: "MACD",
-                type: "bar",
+                type: "custom",
                 xAxisIndex: 2,
                 yAxisIndex: 2,
-                data: macdData.macd,
-                itemStyle: {
-                  color(params) {
-                    const index = params.dataIndex;
-                    const crossColor = macdData.crossBars[index]?.color;
-                    if (crossColor) return crossColor;
-                    return params.value >= 0 ? upColor : downColor;
-                  },
+                data: macdData.macd.map((value, index) => [index, value]),
+                renderItem(params, api) {
+                  const xValue = api.value(0);
+                  const yValue = api.value(1);
+                  if (yValue == null) return null;
+                  const zeroPoint = api.coord([xValue, 0]);
+                  const valuePoint = api.coord([xValue, yValue]);
+                  return {
+                    type: "rect",
+                    shape: {
+                      x: valuePoint[0] - 1.5,
+                      y: Math.min(zeroPoint[1], valuePoint[1]),
+                      width: 3,
+                      height: Math.max(Math.abs(valuePoint[1] - zeroPoint[1]), 1),
+                    },
+                    style: { fill: yValue >= 0 ? upColor : downColor },
+                  };
+                },
+              },
+              {
+                name: "MACD零轴穿越",
+                type: "custom",
+                xAxisIndex: 2,
+                yAxisIndex: 2,
+                data: macdData.crossMacd.map((value, index) => [index, value]),
+                silent: true,
+                renderItem(params, api) {
+                  const xValue = api.value(0);
+                  const yValue = api.value(1);
+                  if (yValue == null) return null;
+                  const color = macdData.crossBars[params.dataIndex]?.color;
+                  if (!color) return null;
+                  const zeroPoint = api.coord([xValue, 0]);
+                  const valuePoint = api.coord([xValue, yValue]);
+                  return {
+                    type: "rect",
+                    shape: {
+                      x: valuePoint[0] - 4,
+                      y: Math.min(zeroPoint[1], valuePoint[1]),
+                      width: 8,
+                      height: Math.max(Math.abs(valuePoint[1] - zeroPoint[1]), 1),
+                    },
+                    style: { fill: color },
+                  };
                 },
               },
               {
@@ -977,13 +1014,12 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                   if (yStart == null || yEnd == null) return null;
                   const startPoint = api.coord([xValue, yStart]);
                   const endPoint = api.coord([xValue, yEnd]);
-                  const size = api.size([1, 0]);
                   return {
                     type: "rect",
                     shape: {
-                      x: startPoint[0] - Math.max(size[0] * 0.18, 1),
+                      x: startPoint[0] - 1.5,
                       y: Math.min(startPoint[1], endPoint[1]),
-                      width: Math.max(size[0] * 0.36, 1),
+                      width: 3,
                       height: Math.max(Math.abs(endPoint[1] - startPoint[1]), 1),
                     },
                     style: { fill: "#ffff80" },
