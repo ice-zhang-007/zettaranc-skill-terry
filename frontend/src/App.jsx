@@ -689,7 +689,7 @@ function aggregateKlineRows(rows, period) {
   });
 }
 
-function KlinePanel({ data, period, lineMode }) {
+function KlinePanel({ data, period, lineMode, quoteSummary }) {
   const chartRef = useRef(null);
   const chartInstanceRef = useRef(null);
   const rows = useMemo(
@@ -1021,6 +1021,7 @@ function KlinePanel({ data, period, lineMode }) {
             {formatDateLabel(rows[0].trade_date)} ~{" "}
             {formatDateLabel(rows[rows.length - 1].trade_date)}
           </span>
+          {quoteSummary ? <em>{quoteSummary}</em> : null}
         </div>
       </div>
       <div ref={chartRef} className="kline-echarts" />
@@ -1073,16 +1074,20 @@ function StockDetailPage() {
   const isWatched = Boolean(
     watchData?.items?.some((item) => item.ts_code === data?.ts_code),
   );
-  const marketStats = [
-    { label: "总市值", value: "-" },
-    { label: "流通市值", value: "-" },
-    { label: "开", value: formatPrice(latestKline?.[0]) },
-    { label: "高", value: formatPrice(latestKline?.[3]) },
-    { label: "低", value: formatPrice(latestKline?.[2]) },
-    { label: "收", value: formatPrice(latestPoint?.close) },
-    { label: "涨幅", value: formatPercent(latestPoint?.pct_chg) },
-    { label: "成交额", value: formatAmount(latestPoint?.amount) },
-  ];
+  const signalText = indicatorFlags.length
+    ? indicatorFlags.map((item) => item.label).join(" / ")
+    : "暂无显著信号";
+  const quoteSummary = latestPoint
+    ? [
+        `开 ${formatPrice(latestKline?.[0])}`,
+        `高 ${formatPrice(latestKline?.[3])}`,
+        `低 ${formatPrice(latestKline?.[2])}`,
+        `收 ${formatPrice(latestPoint?.close)}`,
+        `涨幅 ${formatPercent(latestPoint?.pct_chg)}`,
+        `成交额 ${formatAmount(latestPoint?.amount)}`,
+        signalText,
+      ].join("  ")
+    : "";
 
   useEffect(() => {
     if (!selectionItems.length) return undefined;
@@ -1269,32 +1274,12 @@ function StockDetailPage() {
             </div>
 
             <div className="chart-workspace">
-              <KlinePanel data={data} period={period} lineMode={lineMode} />
-            </div>
-
-            <div className="signal-panel">
-              <div className="market-stat-grid">
-                {marketStats.map((item) => (
-                  <div key={item.label}>
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                  </div>
-                ))}
-              </div>
-              <div className="badge-wrap">
-                {indicatorFlags.length ? (
-                  indicatorFlags.map((item) => (
-                    <span key={item.label} className="badge">
-                      {item.label}
-                    </span>
-                  ))
-                ) : (
-                  <span className="badge secondary">暂无显著信号</span>
-                )}
-              </div>
-              {data.indicator?.sell_reason ? (
-                <p className="detail-note">{data.indicator.sell_reason}</p>
-              ) : null}
+              <KlinePanel
+                data={data}
+                period={period}
+                lineMode={lineMode}
+                quoteSummary={quoteSummary}
+              />
             </div>
           </div>
         </section>
