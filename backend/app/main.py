@@ -1,11 +1,19 @@
 import json
 import os
 import sqlite3
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+try:
+    import numpy as np
+    import pandas as pd
+except ImportError:
+    np = None
+    pd = None
 
 DB_PATH = os.getenv(
     "STOCK_DB_PATH",
@@ -172,32 +180,40 @@ def get_recent_trade_dates(conn: sqlite3.Connection, limit: int = 10) -> list[st
     ]
 
 
-def rolling_value(values: list[float], index: int, window: int, fn: Any) -> float | None:
-    if index + 1 < window:
-        return None
-    chunk = values[index + 1 - window : index + 1]
-    return fn(chunk)
-
-
 def rolling_ma(values: list[float], window: int) -> list[float | None]:
-    return [
-        rolling_value(values, index, window, lambda chunk: sum(chunk) / window)
-        for index in range(len(values))
-    ]
+    result: list[float | None] = []
+    running_sum = 0.0
+    for index, value in enumerate(values):
+        running_sum += value
+        if index >= window:
+            running_sum -= values[index - window]
+        result.append(running_sum / window if index + 1 >= window else None)
+    return result
+
+
+def rolling_extreme(values: list[float], window: int, prefer_max: bool) -> list[float | None]:
+    result: list[float | None] = [None] * len(values)
+    candidates: deque[int] = deque()
+    for index, value in enumerate(values):
+        while candidates and candidates[0] <= index - window:
+            candidates.popleft()
+        while candidates:
+            tail_value = values[candidates[-1]]
+            if (prefer_max and tail_value >= value) or (not prefer_max and tail_value <= value):
+                break
+            candidates.pop()
+        candidates.append(index)
+        if index + 1 >= window:
+            result[index] = values[candidates[0]]
+    return result
 
 
 def rolling_hhv(values: list[float], window: int) -> list[float | None]:
-    return [
-        rolling_value(values, index, window, max)
-        for index in range(len(values))
-    ]
+    return rolling_extreme(values, window, True)
 
 
 def rolling_llv(values: list[float], window: int) -> list[float | None]:
-    return [
-        rolling_value(values, index, window, min)
-        for index in range(len(values))
-    ]
+    return rolling_extreme(values, window, False)
 
 
 def ema(values: list[float], window: int) -> list[float]:
@@ -225,7 +241,116 @@ def safe_div(numerator: float, denominator: float, fallback: float = 0) -> float
     return numerator / denominator
 
 
+def tdx_sma_series(series: Any, window: int, weight: int) -> Any:
+    result = pd.Series(np.nan, index=series.index, dtype="float64")
+    previous = np.nan
+    for index, value in enumerate(series.astype("float64")):
+        if pd.isna(value):
+            continue
+        if pd.isna(previous):
+            previous = value
+        else:
+            previous = (weight * value + (window - weight) * previous) / window
+        result.iloc[index] = previous
+    return result
+
+
+def evaluate_selection_formula_vectorized(history: list[sqlite3.Row]) -> dict[str, list[str]]:
+    if pd is None or np is None or len(history) < 115:
+        return {}
+
+    df = pd.DataFrame(
+        {
+            "open": [row["open"] if row["open"] is not None else row["close"] for row in history],
+            "high": [row["high"] if row["high"] is not None else row["close"] for row in history],
+            "low": [row["low"] if row["low"] is not None else row["close"] for row in history],
+            "close": [row["close"] for row in history],
+            "vol": [row["vol"] for row in history],
+        },
+        dtype="float64",
+    ).fillna(0)
+
+    C = df["close"]
+    O = df["open"]
+    H = df["high"]
+    L = df["low"]
+    V = df["vol"]
+
+    rng = H.rolling(9).max() - L.rolling(9).min()
+    llv = L.rolling(9).min()
+    rsv = pd.Series(
+        np.where(rng == 0, 50, (C - llv) / rng * 100),
+        index=C.index,
+        dtype="float64",
+    )
+    K = tdx_sma_series(rsv, 3, 1)
+    D = tdx_sma_series(K, 3, 1)
+    J = 3 * K - 2 * D
+
+    ZXDQ = C.ewm(span=10, adjust=False).mean().ewm(span=10, adjust=False).mean()
+    ZXDKX = (
+        C.rolling(14).mean()
+        + C.rolling(28).mean()
+        + C.rolling(57).mean()
+        + C.rolling(114).mean()
+    ) / 4
+
+    prev_close = C.shift(1)
+    amp = (H - L) / prev_close * 100
+    pct = (C - prev_close) / prev_close * 100
+
+    B1 = (
+        (J < 17)
+        & (C > ZXDKX)
+        & (ZXDQ > ZXDKX)
+        & (amp <= 7)
+        & (pct >= -2.98)
+        & (pct <= 2.95)
+    )
+
+    upper_shadow = (C > O) & (((H - C) / (H - prev_close)) < 0.3)
+    B2 = B1.shift(1).fillna(False) & (pct > 3.95) & (V > V.shift(1)) & (J < 80) & upper_shadow
+
+    short_range = C.rolling(3).max() - L.rolling(3).min()
+    long_range = C.rolling(21).max() - L.rolling(21).min()
+    short_vol = pd.Series(
+        np.where(short_range == 0, 50, (C - L.rolling(3).min()) / short_range * 100),
+        index=C.index,
+        dtype="float64",
+    )
+    long_vol = pd.Series(
+        np.where(long_range == 0, 50, (C - L.rolling(21).min()) / long_range * 100),
+        index=C.index,
+        dtype="float64",
+    )
+    needle = (
+        (long_vol.shift(2) > 85)
+        & (short_vol.shift(2) > 70)
+        & (long_vol.shift(1) >= 70)
+        & (short_vol.shift(1) >= 70)
+        & (long_vol > 70)
+        & (short_vol <= 30)
+    )
+
+    last = df.index[-1]
+    result: dict[str, list[str]] = {}
+    if bool(B1.iloc[-1]):
+        result["B1"] = ["B1", f"J={J.iloc[-1]:.1f}", "知行趋势上方"]
+    if bool(B2.iloc[-1]):
+        result["B2"] = ["B2", "昨日B1", "放量突破"]
+    if bool(needle.iloc[-1]):
+        result["单针"] = [
+            "单针",
+            f"短:{short_vol.loc[last]:.1f}",
+            f"长:{long_vol.loc[last]:.1f}",
+        ]
+    return result
+
+
 def evaluate_selection_formula(history: list[sqlite3.Row]) -> dict[str, list[str]]:
+    if pd is not None and np is not None:
+        return evaluate_selection_formula_vectorized(history)
+
     if len(history) < 115:
         return {}
 
@@ -376,9 +501,17 @@ def build_selection_for_date(
     history_rows = conn.execute(
         f"""
         SELECT ts_code, trade_date, open, high, low, close, vol
-        FROM daily_kline
-        WHERE trade_date <= ?
-          AND ts_code IN ({placeholders})
+        FROM (
+            SELECT ts_code, trade_date, open, high, low, close, vol,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY ts_code
+                       ORDER BY trade_date DESC
+                   ) AS rn
+            FROM daily_kline
+            WHERE trade_date <= ?
+              AND ts_code IN ({placeholders})
+        )
+        WHERE rn <= 500
         ORDER BY ts_code, trade_date ASC
         """,
         (trade_date, *current_by_code.keys()),
