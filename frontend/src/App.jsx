@@ -697,6 +697,7 @@ function aggregateKlineRows(rows, period) {
 function KlinePanel({ data, period, lineMode, quoteSummary }) {
   const chartRef = useRef(null);
   const chartInstanceRef = useRef(null);
+  const [hoverIndex, setHoverIndex] = useState(null);
   const rows = useMemo(
     () => aggregateKlineRows(data?.history || [], period),
     [data?.history, period],
@@ -779,14 +780,9 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                   const values = k.data.length >= 5 ? k.data.slice(1) : k.data;
                   const [open, close, low, high] = values;
                   const color = close >= open ? upColor : downColor;
-                  html += `<span style="color:${color}">●</span> K线 开:<b>${open.toFixed(2)}</b> 收:<b>${close.toFixed(2)}</b> 高:<b>${high.toFixed(2)}</b> 低:<b>${low.toFixed(2)}</b><br/>`;
+                  const pct = rows[k.dataIndex]?.pct_chg;
+                  html += `<span style="color:${color}">●</span> K线 开:<b>${open.toFixed(2)}</b> 收:<b>${close.toFixed(2)}</b> 高:<b>${high.toFixed(2)}</b> 低:<b>${low.toFixed(2)}</b> 涨幅:<b>${formatPercent(pct)}</b><br/>`;
                 }
-                overlaySeries.forEach(({ name }) => {
-                  const point = params.find((item) => item.seriesName === name);
-                  if (point?.data != null) {
-                    html += `<span style="color:${point.color}">━</span> ${name}: <b>${Number(point.data).toFixed(2)}</b><br/>`;
-                  }
-                });
                 const volume = params.find((item) => item.seriesName === "成交量");
                 if (volume) {
                   html += `成交量: <b>${formatVolume(volume.data[1])}</b><br/>`;
@@ -1051,6 +1047,15 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
           true,
         );
 
+        const updateOverlayHeader = (event) => {
+          const axisInfo = event.axesInfo?.find((item) => item.axisDim === "x");
+          if (axisInfo?.value != null) {
+            setHoverIndex(Number(axisInfo.value));
+          }
+        };
+        chart.off("updateAxisPointer", updateOverlayHeader);
+        chart.on("updateAxisPointer", updateOverlayHeader);
+
         resizeObserver = new ResizeObserver(() => chart.resize());
         resizeObserver.observe(chartRef.current);
 
@@ -1069,10 +1074,30 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
     return () => {
       disposed = true;
       resizeObserver?.disconnect();
+      chartInstanceRef.current?.off("updateAxisPointer");
       chartInstanceRef.current?.dispose();
       chartInstanceRef.current = null;
     };
   }, [rows, lineMode]);
+
+  const headerOverlaySeries =
+    lineMode === "zhixing"
+      ? [
+          { name: "短期趋势", data: calculateZhixingShort(rows) },
+          { name: "长期趋势", data: calculateZhixingLong(rows) },
+        ]
+      : Object.keys(maColors).map((name) => ({
+          name,
+          data: calculateMA(rows, Number(name.replace("MA", ""))),
+        }));
+  const overlayHeaderIndex = hoverIndex == null ? rows.length - 1 : hoverIndex;
+  const overlayHeaderText = headerOverlaySeries
+    .map(({ name, data: lineData }) => {
+      const value = lineData[overlayHeaderIndex];
+      return value == null ? null : `${name}: ${Number(value).toFixed(2)}`;
+    })
+    .filter(Boolean)
+    .join("  ");
 
   if (!rows.length) {
     return <div className="kline-empty">暂无 K 线数据</div>;
@@ -1090,6 +1115,7 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
             {formatDateLabel(rows[rows.length - 1].trade_date)}
           </span>
           {quoteSummary ? <em>{quoteSummary}</em> : null}
+          {overlayHeaderText ? <small>{overlayHeaderText}</small> : null}
         </div>
       </div>
       <div ref={chartRef} className="kline-echarts" />
