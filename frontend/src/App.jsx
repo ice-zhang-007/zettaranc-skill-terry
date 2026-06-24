@@ -249,8 +249,21 @@ function SelectionPage() {
     `/selection-history?refresh=${refreshKey}`,
   );
   const [activeTab, setActiveTab] = useState("B1");
+  const [activeDate, setActiveDate] = useState("");
 
   const tabItems = data?.signals || ["B1", "B2", "单针"];
+  const dayItems = data?.days || [];
+  const selectedDate = activeDate || dayItems[0]?.trade_date || "";
+  const selectedDay = dayItems.find((day) => day.trade_date === selectedDate);
+  const selectedItems = selectedDay?.[activeTab] || [];
+
+  useEffect(() => {
+    if (!dayItems.length) return;
+    if (!selectedDate || !dayItems.some((day) => day.trade_date === selectedDate)) {
+      setActiveDate(dayItems[0].trade_date);
+    }
+  }, [dayItems, selectedDate]);
+
   const runSelection = () => {
     setRefreshing(true);
     setRefreshMessage("");
@@ -307,50 +320,53 @@ function SelectionPage() {
             </button>
           ))}
         </div>
+        <div className="tabs date-tabs">
+          {dayItems.map((day) => (
+            <button
+              key={day.trade_date}
+              className={`tab-button ${selectedDate === day.trade_date ? "active" : ""}`}
+              onClick={() => setActiveDate(day.trade_date)}
+            >
+              {day.trade_date.slice(4)}
+            </button>
+          ))}
+        </div>
         {loading && <p>正在加载...</p>}
         {error && <p className="error">{error}</p>}
-        {!loading && data?.days?.length ? (
+        {!loading && selectedDay ? (
           <div className="selection-list">
-            {data.days.map((day) => {
-              const items = day[activeTab] || [];
-              return (
-                <div key={day.trade_date} className="selection-day">
-                  <div className="selection-day-header">
-                    <strong>{day.trade_date}</strong>
-                    <span className="badge secondary">{items.length} 只</span>
-                  </div>
-                  {items.length ? (
-                    <div className="selection-items">
-                      {items.map((item) => (
-                        <div
-                          key={`${day.trade_date}-${item.ts_code}`}
-                          className="row-item"
-                        >
-                          <div>
-                            <StockLink
-                              ts_code={item.ts_code}
-                              name={item.name}
-                            />
-                            <div className="hint">
-                              涨幅 {item.pct_chg}% · 量比 {item.vol_ratio}
-                            </div>
-                          </div>
-                          <div className="badge-wrap">
-                            {item.tags.map((tag) => (
-                              <span key={tag} className="badge secondary">
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
+            <div className="selection-day">
+              <div className="selection-day-header">
+                <strong>{selectedDay.trade_date}</strong>
+                <span className="badge secondary">{selectedItems.length} 只</span>
+              </div>
+              {selectedItems.length ? (
+                <div className="selection-items">
+                  {selectedItems.map((item) => (
+                    <div
+                      key={`${selectedDay.trade_date}-${item.ts_code}`}
+                      className="row-item"
+                    >
+                      <div>
+                        <StockLink ts_code={item.ts_code} name={item.name} />
+                        <div className="hint">
+                          涨幅 {item.pct_chg}% · 量比 {item.vol_ratio}
                         </div>
-                      ))}
+                      </div>
+                      <div className="badge-wrap">
+                        {item.tags.map((tag) => (
+                          <span key={tag} className="badge secondary">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                  ) : (
-                    <div className="hint">当日暂无该信号名单。</div>
-                  )}
+                  ))}
                 </div>
-              );
-            })}
+              ) : (
+                <div className="hint">当日暂无该信号名单。</div>
+              )}
+            </div>
           </div>
         ) : null}
       </div>

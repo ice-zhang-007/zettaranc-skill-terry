@@ -120,6 +120,19 @@ main {
   background: #4a7cff;
   border-color: #4a7cff;
 }
+.date-tabs {
+  margin-top: -4px;
+}
+.date-tabs .tab-button {
+  padding: 6px 10px;
+  color: #9eb1c9;
+  font-size: 0.82rem;
+}
+.date-tabs .tab-button.active {
+  background: rgba(255, 204, 0, 0.16);
+  border-color: rgba(255, 204, 0, 0.55);
+  color: #ffcc00;
+}
 .action-button {
   height: 36px;
   padding: 0 14px;
