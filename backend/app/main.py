@@ -357,7 +357,7 @@ def build_selection_for_date(
     trade_date: str,
     limit: int = 200,
 ) -> dict[str, Any]:
-    rows = conn.execute(
+    current_rows = conn.execute(
         """
         SELECT dk.ts_code, dk.trade_date, dk.close, dk.pct_chg, dk.vol,
                dk.vol_ratio, sb.name
@@ -368,6 +368,24 @@ def build_selection_for_date(
         """,
         (trade_date,),
     ).fetchall()
+    current_by_code = {row["ts_code"]: row for row in current_rows}
+    if not current_by_code:
+        return {"trade_date": trade_date, "B1": [], "B2": [], "单针": []}
+
+    placeholders = ",".join("?" for _ in current_by_code)
+    history_rows = conn.execute(
+        f"""
+        SELECT ts_code, trade_date, open, high, low, close, vol
+        FROM daily_kline
+        WHERE trade_date <= ?
+          AND ts_code IN ({placeholders})
+        ORDER BY ts_code, trade_date ASC
+        """,
+        (trade_date, *current_by_code.keys()),
+    ).fetchall()
+    history_by_code: dict[str, list[sqlite3.Row]] = {}
+    for row in history_rows:
+        history_by_code.setdefault(row["ts_code"], []).append(row)
 
     day_result: dict[str, Any] = {
         "trade_date": trade_date,
@@ -375,16 +393,8 @@ def build_selection_for_date(
         "B2": [],
         "单针": [],
     }
-    for row in rows:
-        history = conn.execute(
-            """
-            SELECT trade_date, open, high, low, close, vol
-            FROM daily_kline
-            WHERE ts_code = ? AND trade_date <= ?
-            ORDER BY trade_date ASC
-            """,
-            (row["ts_code"], trade_date),
-        ).fetchall()
+    for ts_code, history in history_by_code.items():
+        row = current_by_code[ts_code]
         signals = evaluate_selection_formula(history)
         for signal, tags in signals.items():
             day_result[signal].append(
