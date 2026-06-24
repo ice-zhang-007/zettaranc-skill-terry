@@ -5,6 +5,7 @@ const navItems = [
   { to: "/", label: "首页" },
   { to: "/daily-watch", label: "每日看盘" },
   { to: "/screener", label: "策略观察" },
+  { to: "/selection", label: "选股列表" },
   { to: "/watchlist", label: "自选股" },
   { to: "/strategy-backtest", label: "策略回测" },
   { to: "/indicators", label: "指标" },
@@ -225,6 +226,84 @@ function ScreenerPage() {
   );
 }
 
+function SelectionPage() {
+  const { data, loading, error } = useApi("/selection-history");
+  const [activeTab, setActiveTab] = useState("B1");
+
+  const tabItems = data?.signals || ["B1", "B2", "单针"];
+
+  return (
+    <div className="page">
+      <section className="hero">
+        <div>
+          <h1>选股列表</h1>
+          <p>
+            按 B1、B2、单针 三个维度，保留最近 10 日的打点结果，便于回看和对比。
+          </p>
+        </div>
+      </section>
+
+      <div className="card">
+        <div className="tabs">
+          {tabItems.map((item) => (
+            <button
+              key={item}
+              className={`tab-button ${activeTab === item ? "active" : ""}`}
+              onClick={() => setActiveTab(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+        {loading && <p>正在加载...</p>}
+        {error && <p className="error">{error}</p>}
+        {!loading && data?.days?.length ? (
+          <div className="selection-list">
+            {data.days.map((day) => {
+              const items = day[activeTab] || [];
+              return (
+                <div key={day.trade_date} className="selection-day">
+                  <div className="selection-day-header">
+                    <strong>{day.trade_date}</strong>
+                    <span className="badge secondary">{items.length} 只</span>
+                  </div>
+                  {items.length ? (
+                    <div className="selection-items">
+                      {items.map((item) => (
+                        <div
+                          key={`${day.trade_date}-${item.ts_code}`}
+                          className="row-item"
+                        >
+                          <div>
+                            <strong>{item.name}</strong>
+                            <div className="hint">
+                              {item.ts_code} · 涨幅 {item.pct_chg}% · 量比{" "}
+                              {item.vol_ratio}
+                            </div>
+                          </div>
+                          <div className="badge-wrap">
+                            {item.tags.map((tag) => (
+                              <span key={tag} className="badge secondary">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="hint">当日暂无该信号名单。</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function WatchlistPage() {
   const { data } = useApi("/watchlist");
   return (
@@ -325,6 +404,7 @@ function App() {
       "/": "首页",
       "/daily-watch": "每日看盘",
       "/screener": "策略观察",
+      "/selection": "选股列表",
       "/watchlist": "自选股",
       "/strategy-backtest": "策略回测",
       "/indicators": "指标",
@@ -359,6 +439,7 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/daily-watch" element={<DailyWatchPage />} />
           <Route path="/screener" element={<ScreenerPage />} />
+          <Route path="/selection" element={<SelectionPage />} />
           <Route path="/watchlist" element={<WatchlistPage />} />
           <Route path="/strategy-backtest" element={<StrategyBacktestPage />} />
           <Route path="/indicators" element={<IndicatorsPage />} />

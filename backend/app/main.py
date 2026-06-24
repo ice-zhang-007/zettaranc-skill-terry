@@ -92,6 +92,20 @@ def describe_strategy(row: dict[str, Any], indicator: dict[str, Any] | None) -> 
     }
 
 
+def classify_selection_signal(row: dict[str, Any], indicator: dict[str, Any] | None) -> tuple[str | None, list[str]]:
+    pct_chg = float(row.get("pct_chg") or 0)
+    is_limit_up = bool(row.get("is_limit_up"))
+    vol_ratio = float(row.get("vol_ratio") or 0)
+
+    if is_limit_up or pct_chg >= 8 or (indicator and indicator.get("is_fanbao")):
+        return "B1", ["涨停/强势", "反包"] if indicator and indicator.get("is_fanbao") else ["强势"]
+    if pct_chg >= 3 and vol_ratio >= 1.3:
+        return "B2", ["放量回调", "加速"]
+    if indicator and bool(indicator.get("is_needle_20")):
+        return "单针", ["单针", "短线观察"]
+    return None, []
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "db": DB_PATH}
@@ -246,5 +260,61 @@ def watchlist() -> dict[str, Any]:
                 "SELECT ts_code, name, tags, notes, alert_enabled FROM watchlist ORDER BY updated_at DESC LIMIT 20"
             ).fetchall()
             return {"items": [dict(r) for r in rows]}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/selection-history")
+def selection_history() -> dict[str, Any]:
+    try:
+        with get_connection() as conn:
+            trade_dates = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT trade_date FROM daily_kline ORDER BY trade_date DESC LIMIT 10"
+                ).fetchall()
+            ]
+            history: list[dict[str, Any]] = []
+            for trade_date in trade_dates:
+                rows = conn.execute(
+                    """
+                    SELECT dk.ts_code, dk.trade_date, dk.close, dk.pct_chg, dk.vol, dk.vol_ratio,
+                           dk.is_limit_up, sb.name
+                    FROM daily_kline dk
+                    LEFT JOIN stock_basic sb ON sb.ts_code = dk.ts_code
+                    WHERE dk.trade_date = ?
+                    ORDER BY dk.pct_chg DESC, dk.vol DESC
+                    LIMIT 80
+                    """,
+                    (trade_date,),
+                ).fetchall()
+
+                day_result = {"trade_date": trade_date, "B1": [], "B2": [], "单针": []}
+                for row in rows:
+                    indicator_row = conn.execute(
+                        """
+                        SELECT is_fanbao, is_needle_20, signal
+                        FROM indicator_cache
+                        WHERE ts_code = ? AND trade_date = ?
+                        LIMIT 1
+                        """,
+                        (row["ts_code"], trade_date),
+                    ).fetchone()
+                    indicator = dict(indicator_row) if indicator_row else None
+                    signal, tags = classify_selection_signal(dict(row), indicator)
+                    if signal:
+                        day_result[signal].append(
+                            {
+                                "ts_code": row["ts_code"],
+                                "name": row["name"] or row["ts_code"],
+                                "close": round(float(row["close"] or 0), 2),
+                                "pct_chg": round(float(row["pct_chg"] or 0), 2),
+                                "vol_ratio": round(float(row["vol_ratio"] or 1), 2),
+                                "tags": tags,
+                            }
+                        )
+                history.append(day_result)
+
+            return {"signals": ["B1", "B2", "单针"], "days": history}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

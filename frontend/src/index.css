@@ -102,6 +102,46 @@ main {
   background: rgba(255, 255, 255, 0.08);
   color: #dce7f4;
 }
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tab-button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f4f7fb;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.tab-button.active {
+  background: #4a7cff;
+  border-color: #4a7cff;
+}
+.selection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.selection-day {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.selection-day-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.selection-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
