@@ -765,10 +765,31 @@ def stock_detail(ts_code: str, tradeDate: str | None = Query(default=None, alias
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="stock not found")
+            daily_columns = {
+                column["name"] for column in conn.execute("PRAGMA table_info(daily_kline)")
+            }
+            optional_columns = [
+                column
+                for column in ("turnover_rate", "turnover")
+                if column in daily_columns
+            ]
+            daily_select_columns = [
+                "trade_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "pct_chg",
+                "vol",
+                "amount",
+                "vol_ratio",
+                *optional_columns,
+                "is_limit_up",
+                "is_limit_down",
+            ]
             daily_rows = conn.execute(
-                """
-                SELECT trade_date, open, high, low, close, pct_chg, vol, amount,
-                       is_limit_up, is_limit_down
+                f"""
+                SELECT {", ".join(daily_select_columns)}
                 FROM daily_kline
                 WHERE ts_code = ?
                 ORDER BY trade_date ASC

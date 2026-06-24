@@ -665,6 +665,9 @@ function aggregateKlineRows(rows, period) {
         close,
         vol: Number(item.vol || 0),
         amount: Number(item.amount || 0),
+        vol_ratio: item.vol_ratio,
+        turnover_rate: item.turnover_rate,
+        turnover: item.turnover,
         is_limit_up: item.is_limit_up,
         is_limit_down: item.is_limit_down,
         signal_marks: item.signal_marks || [],
@@ -679,6 +682,9 @@ function aggregateKlineRows(rows, period) {
     current.close = close;
     current.vol += Number(item.vol || 0);
     current.amount += Number(item.amount || 0);
+    current.vol_ratio = item.vol_ratio;
+    current.turnover_rate = item.turnover_rate;
+    current.turnover = item.turnover;
     current.is_limit_up = current.is_limit_up || item.is_limit_up;
     current.is_limit_down = current.is_limit_down || item.is_limit_down;
     current.signal_marks = Array.from(
@@ -727,27 +733,27 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
           .map((item, index) =>
             item.signal_marks?.includes("B1")
               ? {
-                  name: "B1",
-                  coord: [dates[index], kline[index][2]],
-                  value: "B1",
-                  symbol: "circle",
-                  symbolSize: 0,
-                  label: { color: "#ffcc00", fontSize: 12, fontWeight: 700 },
-                }
+                name: "B1",
+                coord: [dates[index], kline[index][2]],
+                value: "B1",
+                symbol: "circle",
+                symbolSize: 0,
+                label: { color: "#ffcc00", fontSize: 12, fontWeight: 700 },
+              }
               : null,
           )
           .filter(Boolean);
         const overlaySeries =
           lineMode === "zhixing"
             ? [
-                { name: "短期趋势", color: "#ffffff", data: calculateZhixingShort(rows) },
-                { name: "长期趋势", color: "#ffcc00", data: calculateZhixingLong(rows) },
-              ]
+              { name: "短期趋势", color: "#ffffff", data: calculateZhixingShort(rows) },
+              { name: "长期趋势", color: "#ffcc00", data: calculateZhixingLong(rows) },
+            ]
             : Object.entries(maColors).map(([name, color]) => ({
-                name,
-                color,
-                data: calculateMA(rows, Number(name.replace("MA", ""))),
-              }));
+              name,
+              color,
+              data: calculateMA(rows, Number(name.replace("MA", ""))),
+            }));
         const overlayNames = overlaySeries.map((item) => item.name);
         const latest = rows[rows.length - 1];
         const start = rows.length > 180 ? 100 - (180 / rows.length) * 100 : 0;
@@ -780,8 +786,17 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                   const values = k.data.length >= 5 ? k.data.slice(1) : k.data;
                   const [open, close, low, high] = values;
                   const color = close >= open ? upColor : downColor;
-                  const pct = rows[k.dataIndex]?.pct_chg;
-                  html += `<span style="color:${color}">●</span> K线 开:<b>${open.toFixed(2)}</b> 收:<b>${close.toFixed(2)}</b> 高:<b>${high.toFixed(2)}</b> 低:<b>${low.toFixed(2)}</b> 涨幅:<b>${formatPercent(pct)}</b><br/>`;
+                  const point = rows[k.dataIndex] || {};
+                  const pct = point.pct_chg;
+                  const turnover = point.turnover_rate ?? point.turnover;
+                  html += `<div style="color:${color};font-weight:700;margin-bottom:3px;">● K线 涨幅: <b>${formatPercent(pct)}</b></div>`;
+                  html += `开: <b>${open.toFixed(2)}</b><br/>`;
+                  html += `收: <b>${close.toFixed(2)}</b><br/>`;
+                  html += `高: <b>${high.toFixed(2)}</b><br/>`;
+                  html += `低: <b>${low.toFixed(2)}</b><br/>`;
+                  html += `成交额: <b>${formatAmount(point.amount)}</b><br/>`;
+                  html += `换手: <b>${turnover == null ? "-" : formatPercent(turnover)}</b><br/>`;
+                  html += `量比: <b>${point.vol_ratio == null ? "-" : Number(point.vol_ratio).toFixed(2)}</b><br/>`;
                 }
 
                 return html;
@@ -815,7 +830,7 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                 min: "dataMin",
                 max: "dataMax",
               },
-            {
+              {
                 type: "category",
                 gridIndex: 2,
                 data: dates,
@@ -842,7 +857,7 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                 axisLine: { show: false },
                 splitLine: { show: false },
               },
-            {
+              {
                 scale: true,
                 gridIndex: 2,
                 splitNumber: 2,
@@ -1067,13 +1082,13 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
   const headerOverlaySeries =
     lineMode === "zhixing"
       ? [
-          { name: "短期趋势", color: "#ffffff", data: calculateZhixingShort(rows) },
-          { name: "长期趋势", color: "#ffcc00", data: calculateZhixingLong(rows) },
-        ]
+        { name: "短期趋势", color: "#ffffff", data: calculateZhixingShort(rows) },
+        { name: "长期趋势", color: "#ffcc00", data: calculateZhixingLong(rows) },
+      ]
       : Object.keys(maColors).map((name) => ({
-          name,
-          data: calculateMA(rows, Number(name.replace("MA", ""))),
-        }));
+        name,
+        data: calculateMA(rows, Number(name.replace("MA", ""))),
+      }));
   const overlayHeaderIndex = hoverIndex == null ? rows.length - 1 : hoverIndex;
   const overlayHeaderItems = headerOverlaySeries
     .map(({ name, color, data: lineData }) => {
@@ -1081,10 +1096,10 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
       return value == null
         ? null
         : {
-            name,
-            value: Number(value).toFixed(2),
-            color: maColors[name] || color || "#dce7f4",
-          };
+          name,
+          value: Number(value).toFixed(2),
+          color: maColors[name] || color || "#dce7f4",
+        };
     })
     .filter(Boolean);
   const volumeHeaderIndex = hoverIndex == null ? rows.length - 1 : hoverIndex;
@@ -1205,8 +1220,8 @@ function StockDetailPage() {
     ? selectionDay.B1
     : selectionDay
       ? Object.values(selectionDay)
-          .filter(Array.isArray)
-          .flat()
+        .filter(Array.isArray)
+        .flat()
       : [];
   const activeIndex = selectionItems.findIndex(
     (item) => item.ts_code === data?.ts_code,
@@ -1219,14 +1234,14 @@ function StockDetailPage() {
     : "暂无显著信号";
   const quoteSummary = latestPoint
     ? [
-        `开 ${formatPrice(latestKline?.[0])}`,
-        `高 ${formatPrice(latestKline?.[3])}`,
-        `低 ${formatPrice(latestKline?.[2])}`,
-        `收 ${formatPrice(latestPoint?.close)}`,
-        `涨幅 ${formatPercent(latestPoint?.pct_chg)}`,
-        `成交额 ${formatAmount(latestPoint?.amount)}`,
-        signalText,
-      ].join("  ")
+      `开 ${formatPrice(latestKline?.[0])}`,
+      `高 ${formatPrice(latestKline?.[3])}`,
+      `低 ${formatPrice(latestKline?.[2])}`,
+      `收 ${formatPrice(latestPoint?.close)}`,
+      `涨幅 ${formatPercent(latestPoint?.pct_chg)}`,
+      `成交额 ${formatAmount(latestPoint?.amount)}`,
+      signalText,
+    ].join("  ")
     : "";
 
   useEffect(() => {
@@ -1264,10 +1279,10 @@ function StockDetailPage() {
         body: isWatched
           ? undefined
           : JSON.stringify({
-              ts_code: data.ts_code,
-              name: data.name,
-              tags: indicatorFlags.map((item) => item.label).join(","),
-            }),
+            ts_code: data.ts_code,
+            name: data.name,
+            tags: indicatorFlags.map((item) => item.label).join(","),
+          }),
       },
     )
       .then((res) => {
@@ -1302,9 +1317,8 @@ function StockDetailPage() {
                 <Link
                   key={item.ts_code}
                   to={`/stock/${item.ts_code}`}
-                  className={`selection-rail-item ${
-                    item.ts_code === data.ts_code ? "active" : ""
-                  }`}
+                  className={`selection-rail-item ${item.ts_code === data.ts_code ? "active" : ""
+                    }`}
                 >
                   <span>{index + 1}.</span>
                   <strong>{item.ts_code.split(".")[0]}</strong>
