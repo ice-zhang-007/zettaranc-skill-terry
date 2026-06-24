@@ -172,6 +172,186 @@ def get_recent_trade_dates(conn: sqlite3.Connection, limit: int = 10) -> list[st
     ]
 
 
+def rolling_value(values: list[float], index: int, window: int, fn: Any) -> float | None:
+    if index + 1 < window:
+        return None
+    chunk = values[index + 1 - window : index + 1]
+    return fn(chunk)
+
+
+def rolling_ma(values: list[float], window: int) -> list[float | None]:
+    return [
+        rolling_value(values, index, window, lambda chunk: sum(chunk) / window)
+        for index in range(len(values))
+    ]
+
+
+def rolling_hhv(values: list[float], window: int) -> list[float | None]:
+    return [
+        rolling_value(values, index, window, max)
+        for index in range(len(values))
+    ]
+
+
+def rolling_llv(values: list[float], window: int) -> list[float | None]:
+    return [
+        rolling_value(values, index, window, min)
+        for index in range(len(values))
+    ]
+
+
+def ema(values: list[float], window: int) -> list[float]:
+    if not values:
+        return []
+    alpha = 2 / (window + 1)
+    result = [values[0]]
+    for value in values[1:]:
+        result.append(alpha * value + (1 - alpha) * result[-1])
+    return result
+
+
+def tdx_sma(values: list[float], window: int, weight: int) -> list[float]:
+    if not values:
+        return []
+    result = [values[0]]
+    for value in values[1:]:
+        result.append((weight * value + (window - weight) * result[-1]) / window)
+    return result
+
+
+def safe_div(numerator: float, denominator: float, fallback: float = 0) -> float:
+    if denominator == 0:
+        return fallback
+    return numerator / denominator
+
+
+def evaluate_selection_formula(history: list[sqlite3.Row]) -> dict[str, list[str]]:
+    if len(history) < 115:
+        return {}
+
+    opens = [float(row["open"] if row["open"] is not None else row["close"] or 0) for row in history]
+    highs = [float(row["high"] if row["high"] is not None else row["close"] or 0) for row in history]
+    lows = [float(row["low"] if row["low"] is not None else row["close"] or 0) for row in history]
+    closes = [float(row["close"] or 0) for row in history]
+    volumes = [float(row["vol"] or 0) for row in history]
+
+    ma14 = rolling_ma(closes, 14)
+    ma28 = rolling_ma(closes, 28)
+    ma57 = rolling_ma(closes, 57)
+    ma114 = rolling_ma(closes, 114)
+
+    high9 = rolling_hhv(highs, 9)
+    low9 = rolling_llv(lows, 9)
+    rsv = [
+        50
+        if high9[index] is None or low9[index] is None
+        else safe_div(closes[index] - low9[index], high9[index] - low9[index], 0.5) * 100
+        for index in range(len(history))
+    ]
+    k_values = tdx_sma(rsv, 3, 1)
+    d_values = tdx_sma(k_values, 3, 1)
+    j_values = [
+        3 * k_values[index] - 2 * d_values[index]
+        for index in range(len(history))
+    ]
+
+    zxdq = ema(ema(closes, 10), 10)
+    zxdkx: list[float | None] = []
+    for index in range(len(history)):
+        parts = [ma14[index], ma28[index], ma57[index], ma114[index]]
+        zxdkx.append(None if any(value is None for value in parts) else sum(parts) / 4)
+
+    b1_series: list[bool] = []
+    short_vol: list[float] = []
+    long_vol: list[float] = []
+    high_close3 = rolling_hhv(closes, 3)
+    low3 = rolling_llv(lows, 3)
+    high_close21 = rolling_hhv(closes, 21)
+    low21 = rolling_llv(lows, 21)
+
+    for index in range(len(history)):
+        prev_close = closes[index - 1] if index > 0 else closes[index]
+        amplitude = safe_div(highs[index] - lows[index], prev_close) * 100
+        pct_chg = safe_div(closes[index], prev_close, 1) * 100 - 100
+        center = zxdkx[index]
+        b1_series.append(
+            center is not None
+            and j_values[index] < 17
+            and closes[index] > center
+            and zxdq[index] > center
+            and amplitude <= 7
+            and -2.98 <= pct_chg <= 2.95
+        )
+
+        short_range = (
+            None
+            if high_close3[index] is None or low3[index] is None
+            else high_close3[index] - low3[index]
+        )
+        long_range = (
+            None
+            if high_close21[index] is None or low21[index] is None
+            else high_close21[index] - low21[index]
+        )
+        short_vol.append(
+            50
+            if short_range is None
+            else safe_div(closes[index] - low3[index], short_range, 0.5) * 100
+        )
+        long_vol.append(
+            50
+            if long_range is None
+            else safe_div(closes[index] - low21[index], long_range, 0.5) * 100
+        )
+
+    index = len(history) - 1
+    prev_close = closes[index - 1]
+    pct_chg = safe_div(closes[index], prev_close, 1) * 100 - 100
+    denominator = highs[index] - prev_close
+    upper_shadow_ok = (
+        closes[index] > opens[index]
+        and denominator > 0
+        and (highs[index] - closes[index]) / denominator < 0.3
+    )
+    b2 = (
+        b1_series[index - 1]
+        and pct_chg > 3.95
+        and volumes[index] > volumes[index - 1]
+        and j_values[index] < 80
+        and upper_shadow_ok
+    )
+    needle = (
+        len(history) >= 3
+        and long_vol[index - 2] > 85
+        and short_vol[index - 2] > 70
+        and long_vol[index - 1] >= 70
+        and short_vol[index - 1] >= 70
+        and long_vol[index] > 70
+        and short_vol[index] <= 30
+    )
+
+    result: dict[str, list[str]] = {}
+    if b1_series[index]:
+        result["B1"] = [
+            "B1",
+            f"J={j_values[index]:.1f}",
+            "知行趋势上方",
+        ]
+    if b2:
+        result["B2"] = [
+            "B2",
+            "昨日B1",
+            "放量突破",
+        ]
+    if needle:
+        result["单针"] = [
+            "单针",
+            f"短:{short_vol[index]:.1f}",
+            f"长:{long_vol[index]:.1f}",
+        ]
+    return result
+
+
 def build_selection_for_date(
     conn: sqlite3.Connection,
     trade_date: str,
@@ -180,14 +360,13 @@ def build_selection_for_date(
     rows = conn.execute(
         """
         SELECT dk.ts_code, dk.trade_date, dk.close, dk.pct_chg, dk.vol,
-               dk.vol_ratio, dk.is_limit_up, sb.name
+               dk.vol_ratio, sb.name
         FROM daily_kline dk
         LEFT JOIN stock_basic sb ON sb.ts_code = dk.ts_code
         WHERE dk.trade_date = ?
         ORDER BY dk.pct_chg DESC, dk.vol DESC
-        LIMIT ?
         """,
-        (trade_date, limit),
+        (trade_date,),
     ).fetchall()
 
     day_result: dict[str, Any] = {
@@ -197,18 +376,17 @@ def build_selection_for_date(
         "单针": [],
     }
     for row in rows:
-        indicator_row = conn.execute(
+        history = conn.execute(
             """
-            SELECT is_fanbao, is_needle_20, signal
-            FROM indicator_cache
-            WHERE ts_code = ? AND trade_date = ?
-            LIMIT 1
+            SELECT trade_date, open, high, low, close, vol
+            FROM daily_kline
+            WHERE ts_code = ? AND trade_date <= ?
+            ORDER BY trade_date ASC
             """,
             (row["ts_code"], trade_date),
-        ).fetchone()
-        indicator = dict(indicator_row) if indicator_row else None
-        signal, tags = classify_selection_signal(dict(row), indicator)
-        if signal:
+        ).fetchall()
+        signals = evaluate_selection_formula(history)
+        for signal, tags in signals.items():
             day_result[signal].append(
                 {
                     "ts_code": row["ts_code"],
@@ -219,6 +397,12 @@ def build_selection_for_date(
                     "tags": tags,
                 }
             )
+    for signal in ["B1", "B2", "单针"]:
+        day_result[signal].sort(
+            key=lambda item: (float(item["pct_chg"] or 0), float(item["close"] or 0)),
+            reverse=True,
+        )
+        day_result[signal] = day_result[signal][:limit]
     return day_result
 
 
