@@ -1119,6 +1119,7 @@ function StockDetailPage() {
 
 function App() {
   const location = useLocation();
+  const isStockDetail = location.pathname.startsWith("/stock/");
   const title = useMemo(() => {
     const map = {
       "/": "首页",
@@ -1129,14 +1130,14 @@ function App() {
       "/strategy-backtest": "策略回测",
       "/indicators": "指标",
     };
-    if (location.pathname.startsWith("/stock/")) {
+    if (isStockDetail) {
       return "个股详情";
     }
     return map[location.pathname] || "ZettaRanc";
-  }, [location.pathname]);
+  }, [isStockDetail, location.pathname]);
 
   return (
-    <div className="app-shell">
+    <div className={isStockDetail ? "app-shell stock-detail-shell" : "app-shell"}>
       <header className="topbar">
         <div>
           <div className="brand">ZettaRanc</div>
@@ -1157,7 +1158,7 @@ function App() {
         </nav>
       </header>
 
-      <main>
+      <main className={isStockDetail ? "stock-detail-main" : ""}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/daily-watch" element={<DailyWatchPage />} />

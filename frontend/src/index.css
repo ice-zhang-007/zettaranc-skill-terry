@@ -259,17 +259,35 @@ td {
   color: #9eb1c9;
   line-height: 1.6;
 }
+.stock-detail-shell .topbar {
+  display: none;
+}
+.stock-detail-main {
+  width: 100%;
+  max-width: none;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+}
 .stock-detail-page {
+  width: 100%;
+  height: 100%;
   gap: 0;
+  min-height: 0;
 }
 .kline-layout {
   display: grid;
   grid-template-columns: 290px minmax(0, 1fr);
-  min-height: calc(100vh - 120px);
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid #1f2937;
   border-radius: 8px;
   background: #070b10;
+}
+.stock-detail-page .kline-layout {
+  border: 0;
+  border-radius: 0;
 }
 .selection-rail {
   display: flex;
@@ -338,9 +356,12 @@ td {
   white-space: nowrap;
 }
 .quote-shell {
+  display: flex;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   background: #070b10;
+  flex-direction: column;
 }
 .quote-actions {
   display: flex;
@@ -470,6 +491,8 @@ td {
   background: #151303;
 }
 .chart-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
   background: #050505;
 }
 .signal-panel {
@@ -512,7 +535,7 @@ td {
 }
 .terminal-chart {
   position: relative;
-  height: 680px;
+  height: 100%;
   margin: 0;
   overflow: hidden;
   border: 0;
@@ -608,5 +631,11 @@ td {
   }
   .market-stat-grid {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .stock-detail-page .terminal-chart {
+    height: 100%;
   }
 }
