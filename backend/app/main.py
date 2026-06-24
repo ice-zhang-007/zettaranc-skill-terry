@@ -19,6 +19,7 @@ DB_PATH = os.getenv(
     "STOCK_DB_PATH",
     "/Users/zhangyb04/code/github/zettaranc-skill/data/stock_data.sqlite",
 )
+USE_PANDAS_SELECTION = os.getenv("USE_PANDAS_SELECTION") == "1"
 
 app = FastAPI(title="ZettaRanc Daily Watch API", version="0.1.0")
 app.add_middleware(
@@ -348,7 +349,7 @@ def evaluate_selection_formula_vectorized(history: list[sqlite3.Row]) -> dict[st
 
 
 def evaluate_selection_formula(history: list[sqlite3.Row]) -> dict[str, list[str]]:
-    if pd is not None and np is not None:
+    if USE_PANDAS_SELECTION and pd is not None and np is not None:
         return evaluate_selection_formula_vectorized(history)
 
     if len(history) < 115:
