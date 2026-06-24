@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from "react-router-dom";
 
 const navItems = [
   { to: "/", label: "首页" },
@@ -45,6 +52,15 @@ function StatCard({ title, value, hint }) {
       <div className="value">{value}</div>
       <div className="hint">{hint}</div>
     </div>
+  );
+}
+
+function StockLink({ ts_code, name, className = "stock-link" }) {
+  return (
+    <Link to={`/stock/${ts_code}`} className={className}>
+      <strong>{name || ts_code}</strong>
+      <div className="hint">{ts_code}</div>
+    </Link>
   );
 }
 
@@ -94,8 +110,8 @@ function HomePage() {
           <ul className="list">
             {data.top_gainers.map((item) => (
               <li key={item.ts_code}>
-                <strong>{item.ts_code}</strong> · {item.pct_chg}% · 成交额{" "}
-                {item.vol}
+                <StockLink ts_code={item.ts_code} name={item.ts_code} /> ·{" "}
+                {item.pct_chg}% · 成交额 {item.vol}
               </li>
             ))}
           </ul>
@@ -109,9 +125,9 @@ function HomePage() {
           dailyData?.items?.slice(0, 8).map((item) => (
             <div key={item.ts_code} className="row-item">
               <div>
-                <strong>{item.name}</strong>
+                <StockLink ts_code={item.ts_code} name={item.name} />
                 <div className="hint">
-                  {item.ts_code} · {item.pct_chg}% · {item.vol_ratio} 倍量
+                  {item.pct_chg}% · {item.vol_ratio} 倍量
                 </div>
               </div>
               <div className="badge-wrap">
@@ -160,8 +176,7 @@ function DailyWatchPage() {
                 {data.items.map((item) => (
                   <tr key={item.ts_code}>
                     <td>
-                      <strong>{item.name}</strong>
-                      <div className="hint">{item.ts_code}</div>
+                      <StockLink ts_code={item.ts_code} name={item.name} />
                     </td>
                     <td>{item.pct_chg}%</td>
                     <td>{item.vol_ratio}</td>
@@ -215,8 +230,7 @@ function ScreenerPage() {
         {watchData?.items?.slice(0, 10).map((item) => (
           <div key={item.ts_code} className="row-item">
             <div>
-              <strong>{item.name}</strong>
-              <div className="hint">{item.ts_code}</div>
+              <StockLink ts_code={item.ts_code} name={item.name} />
             </div>
             <span className="badge secondary">{item.tags || "观察"}</span>
           </div>
@@ -275,10 +289,12 @@ function SelectionPage() {
                           className="row-item"
                         >
                           <div>
-                            <strong>{item.name}</strong>
+                            <StockLink
+                              ts_code={item.ts_code}
+                              name={item.name}
+                            />
                             <div className="hint">
-                              {item.ts_code} · 涨幅 {item.pct_chg}% · 量比{" "}
-                              {item.vol_ratio}
+                              涨幅 {item.pct_chg}% · 量比 {item.vol_ratio}
                             </div>
                           </div>
                           <div className="badge-wrap">
@@ -318,8 +334,7 @@ function WatchlistPage() {
         {data?.items?.map((item) => (
           <div key={item.ts_code} className="row-item">
             <div>
-              <strong>{item.name}</strong>
-              <div className="hint">{item.ts_code}</div>
+              <StockLink ts_code={item.ts_code} name={item.name} />
             </div>
             <div className="badge-wrap">
               <span className="badge secondary">{item.tags || "观察"}</span>
@@ -384,7 +399,7 @@ function IndicatorsPage() {
         {data?.top_gainers?.map((item) => (
           <div key={item.ts_code} className="row-item">
             <div>
-              <strong>{item.ts_code}</strong>
+              <StockLink ts_code={item.ts_code} name={item.ts_code} />
               <div className="hint">
                 涨幅 {item.pct_chg}% / 量比 {item.vol_ratio}
               </div>
@@ -393,6 +408,129 @@ function IndicatorsPage() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function StockDetailPage() {
+  const { ts_code } = useParams();
+  const { data, loading, error } = useApi(
+    `/stock/${ts_code}?tradeDate=20260624`,
+  );
+
+  const indicatorFlags = [
+    { label: "反包", value: data?.indicator?.is_fanbao },
+    { label: "北斗", value: data?.indicator?.is_beidou },
+    { label: "缩量", value: data?.indicator?.is_suoliang },
+    { label: "单针", value: data?.indicator?.is_needle_20 },
+    { label: "红砖", value: data?.indicator?.brick_trend_up },
+  ].filter((item) => item.value);
+
+  return (
+    <div className="page">
+      <section className="hero">
+        <div>
+          <h1>{data?.name || ts_code}</h1>
+          <p>
+            {data?.ts_code || ts_code} · 最新交易日 {data?.trade_date || "-"}
+          </p>
+        </div>
+        <div className="pill">个股详情</div>
+      </section>
+
+      {loading && <p>正在加载...</p>}
+      {error && <p className="error">{error}</p>}
+      {!loading && data ? (
+        <>
+          <div className="stats-grid">
+            <StatCard
+              title="最新收盘"
+              value={data.history?.[0]?.close ?? "-"}
+              hint="最近一日价格"
+            />
+            <StatCard
+              title="最新涨跌"
+              value={`${data.history?.[0]?.pct_chg ?? "-"}%`}
+              hint="当日涨跌幅"
+            />
+            <StatCard
+              title="信号"
+              value={data.indicator?.signal || "WATCH"}
+              hint="策略标签"
+            />
+          </div>
+
+          <div className="detail-grid">
+            <div className="card">
+              <h2>基础信息</h2>
+              <div className="detail-list">
+                <div className="detail-row">
+                  <span className="label">代码</span>
+                  <span>{data.ts_code}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="label">名称</span>
+                  <span>{data.name}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="label">最新日期</span>
+                  <span>{data.trade_date}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="label">止损评分</span>
+                  <span>{data.indicator?.sell_score ?? "-"}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="card">
+              <h2>当前指标</h2>
+              <div className="badge-wrap">
+                {indicatorFlags.length ? (
+                  indicatorFlags.map((item) => (
+                    <span key={item.label} className="badge">
+                      {item.label}
+                    </span>
+                  ))
+                ) : (
+                  <span className="badge secondary">暂无显著信号</span>
+                )}
+              </div>
+              {data.indicator?.sell_reason ? (
+                <p className="detail-note">{data.indicator.sell_reason}</p>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="card">
+            <h2>近 10 日行情</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>日期</th>
+                    <th>收盘</th>
+                    <th>涨跌幅</th>
+                    <th>成交量</th>
+                    <th>是否涨停</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.history?.map((item) => (
+                    <tr key={item.trade_date}>
+                      <td>{item.trade_date}</td>
+                      <td>{item.close}</td>
+                      <td>{item.pct_chg}%</td>
+                      <td>{item.vol}</td>
+                      <td>{item.is_limit_up ? "是" : "否"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -409,6 +547,9 @@ function App() {
       "/strategy-backtest": "策略回测",
       "/indicators": "指标",
     };
+    if (location.pathname.startsWith("/stock/")) {
+      return "个股详情";
+    }
     return map[location.pathname] || "ZettaRanc";
   }, [location.pathname]);
 
@@ -440,6 +581,7 @@ function App() {
           <Route path="/daily-watch" element={<DailyWatchPage />} />
           <Route path="/screener" element={<ScreenerPage />} />
           <Route path="/selection" element={<SelectionPage />} />
+          <Route path="/stock/:ts_code" element={<StockDetailPage />} />
           <Route path="/watchlist" element={<WatchlistPage />} />
           <Route path="/strategy-backtest" element={<StrategyBacktestPage />} />
           <Route path="/indicators" element={<IndicatorsPage />} />
