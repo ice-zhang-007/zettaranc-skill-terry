@@ -242,10 +242,38 @@ function ScreenerPage() {
 }
 
 function SelectionPage() {
-  const { data, loading, error } = useApi("/selection-history");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState("");
+  const { data, loading, error } = useApi(
+    `/selection-history?refresh=${refreshKey}`,
+  );
   const [activeTab, setActiveTab] = useState("B1");
 
   const tabItems = data?.signals || ["B1", "B2", "单针"];
+  const runSelection = () => {
+    setRefreshing(true);
+    setRefreshMessage("");
+    fetch("/api/selection-history/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit_days: 10, row_limit: 200 }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`一键选股失败：${res.status}`);
+        return res.json();
+      })
+      .then((json) => {
+        setRefreshMessage(`已缓存 ${json.cached_count ?? 0} 条选股结果`);
+        setRefreshKey((value) => value + 1);
+      })
+      .catch((e) => {
+        setRefreshMessage(String(e));
+      })
+      .finally(() => {
+        setRefreshing(false);
+      });
+  };
 
   return (
     <div className="page">
@@ -256,9 +284,18 @@ function SelectionPage() {
             按 B1、B2、单针 三个维度，保留最近 10 日的打点结果，便于回看和对比。
           </p>
         </div>
+        <button
+          className="action-button"
+          type="button"
+          onClick={runSelection}
+          disabled={refreshing}
+        >
+          {refreshing ? "选股中..." : "一键选股"}
+        </button>
       </section>
 
       <div className="card">
+        {refreshMessage ? <p className="hint">{refreshMessage}</p> : null}
         <div className="tabs">
           {tabItems.map((item) => (
             <button

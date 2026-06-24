@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -49,6 +50,33 @@ def ensure_watchlist_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_watchlist_tags
         ON watchlist(tags)
+        """
+    )
+
+
+def ensure_selection_cache_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS selection_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            signal TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            ts_code TEXT NOT NULL,
+            name TEXT,
+            close REAL,
+            pct_chg REAL,
+            vol_ratio REAL,
+            tags TEXT DEFAULT '[]',
+            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(trade_date, signal, ts_code)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_selection_cache_date_signal
+        ON selection_cache(trade_date DESC, signal, rank)
         """
     )
 
@@ -127,6 +155,166 @@ def classify_selection_signal(row: dict[str, Any], indicator: dict[str, Any] | N
     if indicator and bool(indicator.get("is_needle_20")):
         return "单针", ["单针", "短线观察"]
     return None, []
+
+
+def get_recent_trade_dates(conn: sqlite3.Connection, limit: int = 10) -> list[str]:
+    return [
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT DISTINCT trade_date
+            FROM daily_kline
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    ]
+
+
+def build_selection_for_date(
+    conn: sqlite3.Connection,
+    trade_date: str,
+    limit: int = 200,
+) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT dk.ts_code, dk.trade_date, dk.close, dk.pct_chg, dk.vol,
+               dk.vol_ratio, dk.is_limit_up, sb.name
+        FROM daily_kline dk
+        LEFT JOIN stock_basic sb ON sb.ts_code = dk.ts_code
+        WHERE dk.trade_date = ?
+        ORDER BY dk.pct_chg DESC, dk.vol DESC
+        LIMIT ?
+        """,
+        (trade_date, limit),
+    ).fetchall()
+
+    day_result: dict[str, Any] = {
+        "trade_date": trade_date,
+        "B1": [],
+        "B2": [],
+        "单针": [],
+    }
+    for row in rows:
+        indicator_row = conn.execute(
+            """
+            SELECT is_fanbao, is_needle_20, signal
+            FROM indicator_cache
+            WHERE ts_code = ? AND trade_date = ?
+            LIMIT 1
+            """,
+            (row["ts_code"], trade_date),
+        ).fetchone()
+        indicator = dict(indicator_row) if indicator_row else None
+        signal, tags = classify_selection_signal(dict(row), indicator)
+        if signal:
+            day_result[signal].append(
+                {
+                    "ts_code": row["ts_code"],
+                    "name": row["name"] or row["ts_code"],
+                    "close": round(float(row["close"] or 0), 2),
+                    "pct_chg": round(float(row["pct_chg"] or 0), 2),
+                    "vol_ratio": round(float(row["vol_ratio"] or 1), 2),
+                    "tags": tags,
+                }
+            )
+    return day_result
+
+
+def write_selection_cache(
+    conn: sqlite3.Connection,
+    days: list[dict[str, Any]],
+) -> int:
+    ensure_selection_cache_table(conn)
+    total = 0
+    for day in days:
+        trade_date = day["trade_date"]
+        conn.execute(
+            "DELETE FROM selection_cache WHERE trade_date = ?",
+            (trade_date,),
+        )
+        for signal in ["B1", "B2", "单针"]:
+            for rank, item in enumerate(day.get(signal, []), start=1):
+                conn.execute(
+                    """
+                    INSERT INTO selection_cache (
+                        trade_date, signal, rank, ts_code, name, close,
+                        pct_chg, vol_ratio, tags
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        trade_date,
+                        signal,
+                        rank,
+                        item["ts_code"],
+                        item["name"],
+                        item["close"],
+                        item["pct_chg"],
+                        item["vol_ratio"],
+                        json.dumps(item["tags"], ensure_ascii=False),
+                    ),
+                )
+                total += 1
+    conn.commit()
+    return total
+
+
+def read_selection_cache(
+    conn: sqlite3.Connection,
+    limit_days: int = 10,
+) -> list[dict[str, Any]]:
+    ensure_selection_cache_table(conn)
+    trade_dates = [
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT DISTINCT trade_date
+            FROM selection_cache
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (limit_days,),
+        ).fetchall()
+    ]
+    days: list[dict[str, Any]] = []
+    for trade_date in trade_dates:
+        day_result: dict[str, Any] = {
+            "trade_date": trade_date,
+            "B1": [],
+            "B2": [],
+            "单针": [],
+        }
+        rows = conn.execute(
+            """
+            SELECT signal, ts_code, name, close, pct_chg, vol_ratio, tags
+            FROM selection_cache
+            WHERE trade_date = ?
+            ORDER BY signal, rank
+            """,
+            (trade_date,),
+        ).fetchall()
+        for row in rows:
+            signal = row["signal"]
+            if signal not in day_result:
+                day_result[signal] = []
+            try:
+                tags = json.loads(row["tags"] or "[]")
+            except json.JSONDecodeError:
+                tags = []
+            day_result[signal].append(
+                {
+                    "ts_code": row["ts_code"],
+                    "name": row["name"] or row["ts_code"],
+                    "close": round(float(row["close"] or 0), 2),
+                    "pct_chg": round(float(row["pct_chg"] or 0), 2),
+                    "vol_ratio": round(float(row["vol_ratio"] or 1), 2),
+                    "tags": tags,
+                }
+            )
+        days.append(day_result)
+    return days
 
 
 @app.get("/api/health")
@@ -369,53 +557,48 @@ def delete_watchlist_item(ts_code: str) -> dict[str, Any]:
 def selection_history() -> dict[str, Any]:
     try:
         with get_connection() as conn:
-            trade_dates = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT DISTINCT trade_date FROM daily_kline ORDER BY trade_date DESC LIMIT 10"
-                ).fetchall()
+            history = read_selection_cache(conn)
+            generated = False
+            if not history:
+                trade_dates = get_recent_trade_dates(conn)
+                days = [build_selection_for_date(conn, date) for date in trade_dates]
+                write_selection_cache(conn, days)
+                history = read_selection_cache(conn)
+                generated = True
+
+            return {
+                "signals": ["B1", "B2", "单针"],
+                "days": history,
+                "source": "cache",
+                "generated": generated,
+            }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/selection-history/refresh")
+def refresh_selection_history(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    limit_days = int(payload.get("limit_days") or 10)
+    limit_days = max(1, min(limit_days, 60))
+    row_limit = int(payload.get("row_limit") or 200)
+    row_limit = max(20, min(row_limit, 1000))
+    trade_date = payload.get("trade_date")
+
+    try:
+        with get_connection() as conn:
+            ensure_selection_cache_table(conn)
+            trade_dates = [normalize_trade_date(str(trade_date))] if trade_date else get_recent_trade_dates(conn, limit_days)
+            days = [
+                build_selection_for_date(conn, date, limit=row_limit)
+                for date in trade_dates
+                if date
             ]
-            history: list[dict[str, Any]] = []
-            for trade_date in trade_dates:
-                rows = conn.execute(
-                    """
-                    SELECT dk.ts_code, dk.trade_date, dk.close, dk.pct_chg, dk.vol, dk.vol_ratio,
-                           dk.is_limit_up, sb.name
-                    FROM daily_kline dk
-                    LEFT JOIN stock_basic sb ON sb.ts_code = dk.ts_code
-                    WHERE dk.trade_date = ?
-                    ORDER BY dk.pct_chg DESC, dk.vol DESC
-                    LIMIT 80
-                    """,
-                    (trade_date,),
-                ).fetchall()
-
-                day_result = {"trade_date": trade_date, "B1": [], "B2": [], "单针": []}
-                for row in rows:
-                    indicator_row = conn.execute(
-                        """
-                        SELECT is_fanbao, is_needle_20, signal
-                        FROM indicator_cache
-                        WHERE ts_code = ? AND trade_date = ?
-                        LIMIT 1
-                        """,
-                        (row["ts_code"], trade_date),
-                    ).fetchone()
-                    indicator = dict(indicator_row) if indicator_row else None
-                    signal, tags = classify_selection_signal(dict(row), indicator)
-                    if signal:
-                        day_result[signal].append(
-                            {
-                                "ts_code": row["ts_code"],
-                                "name": row["name"] or row["ts_code"],
-                                "close": round(float(row["close"] or 0), 2),
-                                "pct_chg": round(float(row["pct_chg"] or 0), 2),
-                                "vol_ratio": round(float(row["vol_ratio"] or 1), 2),
-                                "tags": tags,
-                            }
-                        )
-                history.append(day_result)
-
-            return {"signals": ["B1", "B2", "单针"], "days": history}
+            cached_count = write_selection_cache(conn, days)
+            return {
+                "signals": ["B1", "B2", "单针"],
+                "days": read_selection_cache(conn, limit_days),
+                "cached_count": cached_count,
+                "trade_dates": trade_dates,
+            }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
