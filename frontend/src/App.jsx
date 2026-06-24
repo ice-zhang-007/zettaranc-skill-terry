@@ -783,16 +783,7 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
                   const pct = rows[k.dataIndex]?.pct_chg;
                   html += `<span style="color:${color}">●</span> K线 开:<b>${open.toFixed(2)}</b> 收:<b>${close.toFixed(2)}</b> 高:<b>${high.toFixed(2)}</b> 低:<b>${low.toFixed(2)}</b> 涨幅:<b>${formatPercent(pct)}</b><br/>`;
                 }
-                const volume = params.find((item) => item.seriesName === "成交量");
-                if (volume) {
-                  html += `成交量: <b>${formatVolume(volume.data[1])}</b><br/>`;
-                }
-                ["MA5量", "MA60量"].forEach((name) => {
-                  const point = params.find((item) => item.seriesName === name);
-                  if (point?.data != null) {
-                    html += `<span style="color:${point.color}">━</span> ${name}: <b>${formatVolume(point.data)}</b><br/>`;
-                  }
-                });
+
                 ["DIFF", "DEA", "MACD"].forEach((name) => {
                   const point = params.find((item) => item.seriesName === name);
                   const rawValue = Array.isArray(point?.data) ? point.data[1] : point?.data;
@@ -1103,6 +1094,24 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
           };
     })
     .filter(Boolean);
+  const volumeHeaderIndex = hoverIndex == null ? rows.length - 1 : hoverIndex;
+  const volumeHeaderItems = [
+    {
+      name: "成交量",
+      value: formatVolume(rows[volumeHeaderIndex]?.vol),
+      color: "#cbd5e1",
+    },
+    {
+      name: "MA5量",
+      value: formatVolume(calculateVolumeMA(rows, 5)[volumeHeaderIndex]),
+      color: "#ffffff",
+    },
+    {
+      name: "MA60量",
+      value: formatVolume(calculateVolumeMA(rows, 60)[volumeHeaderIndex]),
+      color: "#ffcc00",
+    },
+  ];
 
   if (!rows.length) {
     return <div className="kline-empty">暂无 K 线数据</div>;
@@ -1128,6 +1137,13 @@ function KlinePanel({ data, period, lineMode, quoteSummary }) {
         </div>
       </div>
       <div ref={chartRef} className="kline-echarts" />
+      <div className="volume-subchart-header">
+        {volumeHeaderItems.map((item) => (
+          <span key={item.name} style={{ color: item.color }}>
+            {item.name}: {item.value}
+          </span>
+        ))}
+      </div>
       <div className="kline-load-fallback">ECharts 加载失败，请检查网络。</div>
     </div>
   );
